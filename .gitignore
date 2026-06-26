@@ -1,0 +1,22 @@
+.idea/
+.DS_Store
+.build/
+.swiftpm/
+dist/
+.gemini/
+artifacts/codex-dumps/
+research/
+__pycache__/
+*.pyc
+
+# --- Axon assistant app: secrets & local state (NEVER commit) ---
+assistant/.env
+.env
+assistant/.venv/
+assistant/.chrome-debug-profile/
+assistant/.downloads/
+assistant/.teams_devicecode.json
+assistant/__pycache__/
+assistant/*.png
+# stray temp screenshots from the screenshot feature
+axon_shot_*.png
