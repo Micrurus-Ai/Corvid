@@ -28,7 +28,7 @@ $off = (Get-ChildItem "C:\Windows\assembly\GAC_MSIL\office"    -Recurse -Filter 
 $std = (Get-ChildItem "C:\Windows\assembly\GAC\stdole"         -Recurse -Filter "stdole.dll"       -EA SilentlyContinue | Select-Object -First 1).FullName
 if (-not ($ext -and $off -and $std)) { throw "Office interop assemblies not found in the GAC (need Outlook installed)." }
 & $csc /nologo /target:library /out:"$addin\AxonAddin.dll" /link:"$ext" /link:"$off" /link:"$std" `
-    /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll /reference:Microsoft.CSharp.dll `
+    /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll /reference:Microsoft.CSharp.dll /reference:System.dll /reference:System.Net.Http.dll `
     "$addin\AxonAddin.cs"
 if ($LASTEXITCODE -ne 0) { throw "Add-in compile failed (is Outlook holding AxonAddin.dll? close Outlook and retry)." }
 Write-Host "   add-in built." -ForegroundColor Green

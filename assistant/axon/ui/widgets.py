@@ -330,3 +330,46 @@ class CameraButton(QtWidgets.QPushButton):
         p.setBrush(QtCore.Qt.NoBrush)
         p.drawEllipse(QtCore.QPointF(w / 2, h / 2 + 0.5), 3.0, 3.0)
         p.end()
+
+
+class MicButton(QtWidgets.QPushButton):
+    """A drawn microphone button (no emoji glyphs). Shows a mic when idle and a red stop square
+    while recording — click to start, click again to stop."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(CONTROL_ICON_SIZE, CONTROL_ICON_SIZE)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setStyleSheet("QPushButton{background:transparent;border:none;}")
+        self.recording = False
+
+    def set_recording(self, on):
+        self.recording = bool(on)
+        self.update()
+
+    def paintEvent(self, _e):
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        cx = w / 2.0
+        if self.recording:
+            p.setPen(QtCore.Qt.NoPen)
+            p.setBrush(QtGui.QColor("#e0584f"))  # red "stop" square
+            s = w * 0.40
+            p.drawRoundedRect(QtCore.QRectF(cx - s / 2, h / 2 - s / 2, s, s), 3, 3)
+        else:
+            pen = QtGui.QPen(QtGui.QColor(MUTED))
+            pen.setWidthF(2.0)
+            pen.setCapStyle(QtCore.Qt.RoundCap)
+            pen.setJoinStyle(QtCore.Qt.RoundJoin)
+            p.setPen(pen)
+            p.setBrush(QtCore.Qt.NoBrush)
+            bw, bh, top = w * 0.30, h * 0.40, h * 0.20
+            p.drawRoundedRect(QtCore.QRectF(cx - bw / 2, top, bw, bh), bw / 2, bw / 2)  # mic body
+            aw, ah, ay = w * 0.52, bh * 1.05, top + bh * 0.30
+            p.drawArc(QtCore.QRectF(cx - aw / 2, ay, aw, ah), 200 * 16, 140 * 16)        # cradle
+            base_y = top + bh + ah * 0.42
+            p.drawLine(QtCore.QPointF(cx, base_y), QtCore.QPointF(cx, h * 0.84))          # stand
+            p.drawLine(QtCore.QPointF(cx - w * 0.14, h * 0.84),
+                       QtCore.QPointF(cx + w * 0.14, h * 0.84))                            # foot
+        p.end()

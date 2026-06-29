@@ -51,19 +51,69 @@ def transcribe_audio(path):
         return ""
 
 
-def record_and_transcribe(seconds=6, samplerate=16000):
-    """Record from the default microphone for a few seconds and return the transcribed text.
-    Used by the composer's mic button. Returns '' if recording/transcription isn't available."""
-    try:
-        import sounddevice as sd
-        import soundfile as sf
-    except Exception:
-        return ""
-    try:
-        audio = sd.rec(int(seconds * samplerate), samplerate=samplerate, channels=1)
-        sd.wait()
+class Recorder:
+    """Continuous microphone recorder for the composer's mic button: start() begins capture,
+    stop() writes a WAV and returns its path. Uses a raw int16 stream + the stdlib wave module
+    (no numpy/soundfile needed), so it's light and reliable."""
+
+    def __init__(self, samplerate=16000):
+        self.samplerate = samplerate
+        self._frames = []
+        self._stream = None
+
+    def start(self):
+        try:
+            import sounddevice as sd
+        except Exception:
+            return False
+        self._frames = []
+        try:
+            self._stream = sd.RawInputStream(
+                samplerate=self.samplerate, channels=1, dtype="int16",
+                callback=lambda indata, n, t, s: self._frames.append(bytes(indata)))
+            self._stream.start()
+            return True
+        except Exception:
+            self._stream = None
+            return False
+
+    def stop(self):
+        import wave
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+        if not self._frames:
+            return None
         path = os.path.join(tempfile.gettempdir(), "axon_voice.wav")
-        sf.write(path, audio, samplerate)
-        return transcribe_audio(path)
+        try:
+            wf = wave.open(path, "wb")
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(self.samplerate)
+            wf.writeframes(b"".join(self._frames))
+            wf.close()
+        except Exception:
+            return None
+        self._frames = []
+        return path
+
+
+def play_audio(path):
+    """Replay a recorded WAV (Windows, async)."""
+    try:
+        import winsound
+        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
     except Exception:
-        return ""
+        pass
+
+
+def stop_audio():
+    try:
+        import winsound
+        winsound.PlaySound(None, winsound.SND_PURGE)
+    except Exception:
+        pass

@@ -194,8 +194,108 @@ namespace Axon.OutlookAddin
 
         private class Filing { public string[] matches = new string[0]; public string newFolder = ""; }
 
-        // Ask Axon's Python (agent.suggest_filing) for matching folders + a suggested new folder.
+        // Suggest folders. Fast path: call OpenAI directly in-process (no Python startup, ~1-2s).
+        // Falls back to the packaged exe / dev venv only if the key is missing or the call fails.
         private Filing SuggestFiling(string subject, string sender, string body, string[] folders)
+        {
+            var result = new Filing();
+            if (TrySuggestViaApi(subject, sender, body, folders, result)) return result;
+            return SuggestViaExe(subject, sender, body, folders);
+        }
+
+        // Read the baked-in OpenAI key from the app's .env (next to the installed app / in _internal).
+        private string ApiKey()
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                string root = Path.GetFullPath(Path.Combine(dir, ".."));
+                string[] cands = { Path.Combine(root, "_internal", ".env"), Path.Combine(root, ".env"),
+                                   Path.Combine(root, "assistant", ".env") };
+                foreach (var p in cands)
+                    if (File.Exists(p))
+                        foreach (var line in File.ReadAllLines(p))
+                            if (line.TrimStart().StartsWith("OPENAI_API_KEY"))
+                            {
+                                int i = line.IndexOf('=');
+                                if (i > 0) { string k = line.Substring(i + 1).Trim().Trim('"'); if (k.Length > 10) return k; }
+                            }
+            }
+            catch { }
+            return null;
+        }
+
+        private bool TrySuggestViaApi(string subject, string sender, string body, string[] folders, Filing result)
+        {
+            try
+            {
+                string key = ApiKey();
+                if (string.IsNullOrEmpty(key)) return false;
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                string b = body ?? "";
+                if (b.Length > 1500) b = b.Substring(0, 1500);
+                string prompt =
+                    "Email subject: " + subject + "\nFrom: " + sender + "\nBody (truncated):\n" + b +
+                    "\n\nThe user's existing folders:\n" + js.Serialize(folders) +
+                    "\n\nDecide where to file this email. Reply with ONLY JSON:\n" +
+                    "{\"matches\": [up to 3 folder names taken EXACTLY from the list that fit well, best first], " +
+                    "\"new_folder\": \"if NONE of the existing folders fit, a short clear name (1-3 words) for a NEW " +
+                    "folder to create (must NOT be empty in that case); if an existing folder fits, an empty string\"}";
+                var reqObj = new System.Collections.Generic.Dictionary<string, object>
+                {
+                    { "model", "gpt-4o-mini" }, { "temperature", 0 },
+                    { "messages", new object[] { new System.Collections.Generic.Dictionary<string, object> { { "role", "user" }, { "content", prompt } } } }
+                };
+                System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
+                using (var http = new System.Net.Http.HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(30);
+                    http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + key);
+                    var content = new System.Net.Http.StringContent(js.Serialize(reqObj), System.Text.Encoding.UTF8, "application/json");
+                    var resp = http.PostAsync("https://api.openai.com/v1/chat/completions", content).Result;
+                    string s = resp.Content.ReadAsStringAsync().Result;
+                    if (!resp.IsSuccessStatusCode) return false;
+                    var d = (System.Collections.Generic.Dictionary<string, object>)js.DeserializeObject(s);
+                    var choices = d.ContainsKey("choices") ? d["choices"] as object[] : null;
+                    if (choices == null || choices.Length == 0) return false;
+                    var msg = (System.Collections.Generic.Dictionary<string, object>)((System.Collections.Generic.Dictionary<string, object>)choices[0])["message"];
+                    var mt = System.Text.RegularExpressions.Regex.Match(msg["content"].ToString(), "\\{[\\s\\S]*\\}");
+                    if (!mt.Success) return false;
+                    ParseSuggestion(mt.Value, folders, result, js);
+                    return true;
+                }
+            }
+            catch { return false; }
+        }
+
+        // Map the model's JSON onto the real folder names (case-insensitive); if it "invents" a new
+        // folder that already exists, treat it as a match instead.
+        private void ParseSuggestion(string json, string[] folders, Filing result, System.Web.Script.Serialization.JavaScriptSerializer js)
+        {
+            var d = (System.Collections.Generic.Dictionary<string, object>)js.DeserializeObject(json);
+            var lower = new System.Collections.Generic.Dictionary<string, string>();
+            foreach (var f in folders) if (f != null) lower[f.ToLowerInvariant()] = f;
+            var matches = new System.Collections.Generic.List<string>();
+            if (d.ContainsKey("matches") && d["matches"] is object[])
+                foreach (var x in (object[])d["matches"])
+                {
+                    if (x == null) continue;
+                    string k = x.ToString().Trim().ToLowerInvariant();
+                    if (lower.ContainsKey(k) && !matches.Contains(lower[k])) matches.Add(lower[k]);
+                }
+            string nf = (d.ContainsKey("new_folder") && d["new_folder"] != null) ? d["new_folder"].ToString().Trim() : "";
+            if (nf.Length > 0)
+            {
+                string nfl = nf.ToLowerInvariant();
+                if (lower.ContainsKey(nfl)) { if (!matches.Contains(lower[nfl])) matches.Add(lower[nfl]); }
+                else result.newFolder = nf;
+            }
+            if (matches.Count > 3) matches = matches.GetRange(0, 3);
+            result.matches = matches.ToArray();
+        }
+
+        // Fallback: let the packaged exe (or dev venv) compute the suggestion in Python.
+        private Filing SuggestViaExe(string subject, string sender, string body, string[] folders)
         {
             var result = new Filing();
             try

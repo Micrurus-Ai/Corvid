@@ -5,7 +5,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from axon.ui.theme import (ACCENT, ACCENT_2, PANEL_BG, PANEL_BG_2, SURFACE, BORDER, TEXT,
                             MUTED, FONT_FAMILY, FONT_CSS, HEADER_ICON_SIZE, CONTROL_ICON_SIZE)
 from axon.ui.widgets import (IconButton, ArrowButton, ActivityButton, CloseButton,
-    ProfileButton, GuideButton, ModeButton, ApprovalButton, CameraButton)
+    ProfileButton, GuideButton, ModeButton, ApprovalButton, CameraButton, MicButton)
 from axon.ui.region_selector import RegionSelector
 from axon.ui.highlight import PanelFrame, MarkView
 from axon.ui.theme import SURFACE_2
@@ -105,16 +105,12 @@ class Composer(QtWidgets.QWidget):
         self.camera_btn.act_area.triggered.connect(self._capture_region)
         self.camera_btn.raise_()
 
-        # Mic: click to talk — records a few seconds, transcribes into the input box.
-        self._recording = False
-        self.mic_btn = QtWidgets.QPushButton("\U0001F3A4", self.card)
-        self.mic_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        self.mic_btn.setFixedSize(CONTROL_ICON_SIZE, CONTROL_ICON_SIZE)
-        self.mic_btn.setToolTip("Speak your request")
-        self.mic_btn.setStyleSheet(
-            f"QPushButton{{background:transparent;color:{MUTED};border:none;font-size:15px;}}"
-            f"QPushButton:hover{{color:{TEXT};}}")
-        self.mic_btn.clicked.connect(self._voice_input)
+        # Mic: click to start recording, click again to stop; then replay or remove the clip.
+        self._recorder = None
+        self._voice_path = None
+        self.mic_btn = MicButton(self.card)
+        self.mic_btn.setToolTip("Click to record, click again to stop")
+        self.mic_btn.clicked.connect(self._toggle_record)
         self.mic_btn.raise_()
         self.voice_text.connect(self._on_voice_text)
 
@@ -143,6 +139,34 @@ class Composer(QtWidgets.QWidget):
         _ab.addWidget(self.attach_remove)
         self.attach_bar.hide()
         layout.insertWidget(1, self.attach_bar)
+
+        # Voice-clip bar (appears after recording): replay / remove the recording.
+        self.voice_bar = QtWidgets.QWidget(self.card)
+        _vb = QtWidgets.QHBoxLayout(self.voice_bar)
+        _vb.setContentsMargins(2, 0, 2, 0)
+        _vb.setSpacing(8)
+        self.voice_play = QtWidgets.QPushButton("▶")  # ▶
+        self.voice_play.setCursor(QtCore.Qt.PointingHandCursor)
+        self.voice_play.setFixedSize(24, 24)
+        self.voice_play.setStyleSheet(
+            f"QPushButton{{background:transparent;color:{TEXT};border:1px solid {BORDER};border-radius:12px;}}"
+            "QPushButton:hover{border-color:#4a4b55;}")
+        self.voice_play.clicked.connect(self._play_voice)
+        _vb.addWidget(self.voice_play)
+        self.voice_label = QtWidgets.QLabel("Voice note")
+        self.voice_label.setStyleSheet(f"color:{MUTED};{FONT_CSS}font-size:12px;")
+        _vb.addWidget(self.voice_label)
+        _vb.addStretch(1)
+        self.voice_remove = QtWidgets.QPushButton("✕")  # ✕
+        self.voice_remove.setCursor(QtCore.Qt.PointingHandCursor)
+        self.voice_remove.setFixedSize(22, 22)
+        self.voice_remove.setStyleSheet(
+            f"QPushButton{{background:transparent;color:{MUTED};border:none;font-size:13px;}}"
+            f"QPushButton:hover{{color:{TEXT};}}")
+        self.voice_remove.clicked.connect(self._remove_voice)
+        _vb.addWidget(self.voice_remove)
+        self.voice_bar.hide()
+        layout.insertWidget(2, self.voice_bar)
 
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -286,6 +310,8 @@ class Composer(QtWidgets.QWidget):
         h = 200  # header + input + control row + margins
         if self._attached_image is not None:
             h += self._ATTACH_EXTRA
+        if self._voice_path is not None:
+            h += 40  # voice-clip bar
         if self._activity_visible:
             h += 130
         self.setMinimumHeight(h)
@@ -344,27 +370,57 @@ class Composer(QtWidgets.QWidget):
                                 self.camera_btn.x() + self.camera_btn.width() + 4, cam_y)
                             self.mic_btn.raise_()
 
-    def _voice_input(self):
-        """Record a few seconds from the mic and drop the transcription into the input box."""
-        if self._recording:
+    def _toggle_record(self):
+        """Click to start recording; click again to stop, then transcribe + show the clip."""
+        from axon.vision import Recorder
+        if self._recorder is None:
+            rec = Recorder()
+            if rec.start():
+                self._recorder = rec
+                self.mic_btn.set_recording(True)
             return
-        self._recording = True
-        self.mic_btn.setText("●")  # recording indicator
+        rec, self._recorder = self._recorder, None
+        self.mic_btn.set_recording(False)
+        path = rec.stop()
+        if not path:
+            return
+        self._voice_path = path
+        self.voice_label.setText("Voice note — transcribing…")
+        self.voice_bar.show()
+        self._refresh_min_height()
         import threading
 
         def work():
-            from axon.vision import record_and_transcribe
-            self.voice_text.emit(record_and_transcribe() or "")
+            from axon.vision import transcribe_audio
+            self.voice_text.emit(transcribe_audio(path) or "")
 
         threading.Thread(target=work, daemon=True).start()
 
     def _on_voice_text(self, txt):
-        self._recording = False
-        self.mic_btn.setText("\U0001F3A4")
         if txt:
             cur = self.input.toPlainText().strip()
             self.input.setPlainText((cur + " " + txt).strip() if cur else txt)
+            self.voice_label.setText("Voice note")
+        else:
+            self.voice_label.setText("Voice note (couldn't transcribe)")
         self.input.setFocus()
+
+    def _play_voice(self):
+        from axon.vision import play_audio
+        if self._voice_path:
+            play_audio(self._voice_path)
+
+    def _remove_voice(self):
+        from axon.vision import stop_audio
+        stop_audio()
+        if self._voice_path:
+            try:
+                os.remove(self._voice_path)
+            except Exception:
+                pass
+        self._voice_path = None
+        self.voice_bar.hide()
+        self._refresh_min_height()
 
     def _input_menu(self, pos):
         """Right-click menu on the input: the normal copy/paste plus a Quick actions submenu."""

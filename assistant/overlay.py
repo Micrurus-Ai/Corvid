@@ -8,11 +8,10 @@ import os
 import sys
 import time
 
-from PySide6 import QtGui, QtWidgets
-
-import agent
-from axon.ui.theme import FONT_FAMILY
-from axon.ui.dot import FloatingDot
+# NOTE: the heavy UI/backend imports (PySide6, the dot, the agent) are deferred into main() on
+# purpose. The Outlook add-in calls this exe as `--suggest`, and that path only needs the small
+# folder-suggestion code — not PySide6 / browser-use / python-pptx — so it starts in ~1-2s instead
+# of ~4s+.
 
 _INSTANCE_LOCK = None
 # A healthy dot tags its window with this title (invisible — the dot is frameless) so a later
@@ -139,6 +138,9 @@ def main():
     if not _acquire_single_instance():
         print("Axon intelligence is already running - not starting a second dot.")
         return
+    from PySide6 import QtGui, QtWidgets          # deferred (heavy) — only needed to show the dot
+    from axon.ui.theme import FONT_FAMILY
+    from axon.ui.dot import FloatingDot
     app = QtWidgets.QApplication(sys.argv)
     app.setFont(QtGui.QFont(FONT_FAMILY, 9))
     app.setQuitOnLastWindowClosed(False)
@@ -153,11 +155,12 @@ def _suggest_cli():
     emit suggest_filing(...) as JSON to stdout, and exit. Lets the packaged exe serve the add-in
     (no venv). Writes to fd 1 directly so it works even in a windowed (no-console) build."""
     import json
+    from axon.inbox_filer import suggest_filing  # light import — avoids loading the whole app
     try:
         with open(sys.argv[2], "r", encoding="utf-8-sig") as f:   # utf-8-sig tolerates a BOM
             d = json.load(f)
-        out = json.dumps(agent.suggest_filing(d.get("subject", ""), d.get("sender", ""),
-                                              d.get("body", ""), d.get("folders", [])))
+        out = json.dumps(suggest_filing(d.get("subject", ""), d.get("sender", ""),
+                                        d.get("body", ""), d.get("folders", [])))
     except Exception:
         out = '{"matches": [], "new_folder": ""}'
     try:
