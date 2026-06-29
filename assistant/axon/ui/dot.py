@@ -1,5 +1,6 @@
 """The floating dot: drag/click to summon the composer; hosts workers, popups, guide overlay."""
 import os
+import sys
 import math
 import time
 import threading
@@ -22,6 +23,8 @@ from axon.workers import AgentWorker, InboxWatcher, GuideWorker
 class FloatingDot(QtWidgets.QWidget):
     DIAM = 44
     inbox_suggestions = QtCore.Signal(object)  # folder suggestions ready (from a worker thread)
+    hotkey_email = QtCore.Signal(str, str, str)  # (eid, subject, sender) from the global hotkey
+    _HOTKEY_ID = 0xA17  # Ctrl+Alt+M -> file the email currently open/selected in Outlook
 
     def __init__(self):
         super().__init__()
@@ -67,6 +70,9 @@ class FloatingDot(QtWidgets.QWidget):
         self._folder_popup = FolderPickPopup()
         self._folder_popup.chosen.connect(self._on_folder_chosen)
         self.inbox_suggestions.connect(self._show_folder_popup)
+        # Global hotkey (Ctrl+Alt+M): file whatever email is open/selected in Outlook right now.
+        self.hotkey_email.connect(self._on_inbox_opened)
+        self._register_hotkey()
         if self._settings.get("autofile", False):
             self._inbox_watcher.start()
         _app = QtWidgets.QApplication.instance()
@@ -263,6 +269,42 @@ class FloatingDot(QtWidgets.QWidget):
             self._inbox_watcher.start()
         else:
             self._inbox_watcher.stop()
+
+    def _register_hotkey(self):
+        """Register a system-wide Ctrl+Alt+M hotkey (Windows). WM_HOTKEY is delivered to this
+        window and handled in nativeEvent(). The OS releases it automatically on exit."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_M = 0x0001, 0x0002, 0x4000, 0x4D
+            ctypes.windll.user32.RegisterHotKey(
+                int(self.winId()), self._HOTKEY_ID, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_M)
+        except Exception:
+            pass
+
+    def nativeEvent(self, eventType, message):
+        if eventType == b"windows_generic_MSG":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == 0x0312 and msg.wParam == self._HOTKEY_ID:  # WM_HOTKEY
+                    self._hotkey_fired()
+            except Exception:
+                pass
+        return super().nativeEvent(eventType, message)
+
+    def _hotkey_fired(self):
+        """On the hotkey: fetch the selected/open Outlook email (off the UI thread) and file it."""
+        def work():
+            try:
+                info = agent.active_email()
+            except Exception:
+                info = None
+            if info:
+                self.hotkey_email.emit(info[0], info[1], info[2])
+        threading.Thread(target=work, daemon=True).start()
 
     def _on_inbox_opened(self, eid, subject, sender):
         # Suggest folders off the UI thread (it reads Outlook + calls the model), then show the popup.

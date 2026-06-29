@@ -30,6 +30,7 @@ from axon.tools import TOOLS, DISPATCH  # noqa: F401
 from axon.brain import chat, run_task, guide_live, guide  # noqa: F401
 from axon.inbox_filer import (  # noqa: F401
     inbox_watcher_popen, suggest_folders, rank_folders, suggest_filing, move_email_to_folder,
+    active_email,
 )
 
 if __name__ == "__main__":

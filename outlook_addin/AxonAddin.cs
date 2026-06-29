@@ -46,28 +46,27 @@ namespace Axon.OutlookAddin
         // --- IRibbonExtensibility ---
         public string GetCustomUI(string RibbonID)
         {
-            // Put an "Axon" group on the built-in mail tab, EARLY (right after the New group), so the
-            // buttons stay visible on the Home tab and don't fall into the "..." overflow.
-            string tab, after;
-            if (RibbonID == "Microsoft.Outlook.Explorer") { tab = "TabMail"; after = "GroupMailNew"; }          // main window Home
-            else if (RibbonID == "Microsoft.Outlook.Mail.Read") { tab = "TabReadMessage"; after = "GroupRespond"; } // open email window (after Reply/Forward)
-            else return null;
-            string group =
-                "<group id='axonGroup' label='Axon intelligence' insertAfterMso='" + after + "'>" +
-                "<button id='axonMove' label='Move' size='normal' getImage='GetMoveImage' onAction='OnFile'/>" +
-                "<button id='axonDownload' label='Download' size='normal' getImage='GetDownloadImage' onAction='OnDownload'/>" +
-                "</group>";
-            string ribbon = "<ribbon><tabs><tab idMso='" + tab + "'>" + group + "</tab></tabs></ribbon>";
-            // Right-click menu on an email — always available, never pushed into the ribbon overflow.
-            string ctx = "";
+            // Axon lives ONLY in the right-click menu (no ribbon buttons). Add it to the menu you get
+            // on an email in the list, on multiple selected emails, and inside an open/previewed email.
+            string menus;
             if (RibbonID == "Microsoft.Outlook.Explorer")
-            {
-                ctx = "<contextMenus><contextMenu idMso='ContextMenuMailItem'>" +
-                      "<button id='axonCtxMove' label='Move with Axon' getImage='GetMoveImage' onAction='OnFile'/>" +
-                      "<button id='axonCtxDownload' label='Download with Axon' getImage='GetDownloadImage' onAction='OnDownload'/>" +
-                      "</contextMenu></contextMenus>";
-            }
-            return "<customUI xmlns='http://schemas.microsoft.com/office/2009/07/customui'>" + ribbon + ctx + "</customUI>";
+                menus = CtxMenu("ContextMenuMailItem") + CtxMenu("ContextMenuReadOnlyMailText");
+            else if (RibbonID == "Microsoft.Outlook.Mail.Read")
+                menus = CtxMenu("ContextMenuReadOnlyMailText");
+            else
+                return null;
+            return "<customUI xmlns='http://schemas.microsoft.com/office/2009/07/customui'>" +
+                   "<contextMenus>" + menus + "</contextMenus></customUI>";
+        }
+
+        // Axon's two right-click items for a given Office context-menu id (button ids must be unique).
+        private string CtxMenu(string idMso)
+        {
+            return "<contextMenu idMso='" + idMso + "'>" +
+                   "<menuSeparator id='axonSep_" + idMso + "'/>" +
+                   "<button id='axonMove_" + idMso + "' label='Move with Axon' getImage='GetMoveImage' onAction='OnFile'/>" +
+                   "<button id='axonDownload_" + idMso + "' label='Download with Axon' getImage='GetDownloadImage' onAction='OnDownload'/>" +
+                   "</contextMenu>";
         }
 
         // --- custom ribbon image (the Axon-branded Move icon, distinct from Outlook's built-ins) ---
@@ -110,6 +109,7 @@ namespace Axon.OutlookAddin
                 }
                 string subject = ""; try { subject = (string)mail.Subject; } catch { }
                 string sender = ""; try { sender = (string)mail.SenderName; } catch { }
+                try { string em = (string)mail.SenderEmailAddress; if (!string.IsNullOrEmpty(em)) sender = (sender + " <" + em + ">").Trim(); } catch { }
                 string body = ""; try { body = (string)mail.Body; } catch { }
                 // Show the picker IMMEDIATELY; fetch AI suggestions on a background thread and fill them in.
                 var dlg = new FolderPicker(subject, folders);
@@ -214,7 +214,7 @@ namespace Axon.OutlookAddin
         {
             _apiBase = "https://api.openai.com/v1";
             _apiKey = "";
-            _model = "gpt-4o-mini";
+            _model = "gpt-4o";   // better at matching email topic -> folder than mini (config can override)
             try
             {
                 string p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -263,12 +263,15 @@ namespace Axon.OutlookAddin
                 string b = body ?? "";
                 if (b.Length > 1500) b = b.Substring(0, 1500);
                 string prompt =
-                    "Email subject: " + subject + "\nFrom: " + sender + "\nBody (truncated):\n" + b +
-                    "\n\nThe user's existing folders:\n" + js.Serialize(folders) +
-                    "\n\nDecide where to file this email. Reply with ONLY JSON:\n" +
-                    "{\"matches\": [up to 3 folder names taken EXACTLY from the list that fit well, best first], " +
-                    "\"new_folder\": \"if NONE of the existing folders fit, a short clear name (1-3 words) for a NEW " +
-                    "folder to create (must NOT be empty in that case); if an existing folder fits, an empty string\"}";
+                    "You are filing an email into one of the user's Outlook folders.\n\n" +
+                    "Email\n  Subject: " + subject + "\n  From: " + sender + "\n  Body (truncated):\n" + b + "\n\n" +
+                    "The user's folders (name, with full path for nested ones):\n" + js.Serialize(folders) + "\n\n" +
+                    "Decide based on what the email is ABOUT and WHO it is from. Pick the folder whose name/path " +
+                    "most closely matches that topic; the sender's company/domain is a strong hint. List the " +
+                    "best-fitting folders first (up to 3), but ONLY include a folder that is a genuinely good fit " +
+                    "(do not pad the list). If none clearly fit, leave matches empty and propose a short new folder.\n" +
+                    "Reply with ONLY JSON: {\"matches\": [up to 3 folder names copied EXACTLY from the list, best " +
+                    "first], \"new_folder\": \"a short (1-3 word) new folder name if nothing fits, else an empty string\"}";
                 var reqObj = new System.Collections.Generic.Dictionary<string, object>
                 {
                     { "model", _model },

@@ -229,6 +229,37 @@ try {
 '''
 
 
+_ACTIVE_EMAIL_PS = r'''
+$ErrorActionPreference = "SilentlyContinue"
+try {
+    $ol = [Runtime.InteropServices.Marshal]::GetActiveObject("Outlook.Application")
+    $item = $null
+    $insp = $ol.ActiveInspector(); if ($insp -ne $null) { $item = $insp.CurrentItem }
+    if ($item -eq $null) { $exp = $ol.ActiveExplorer(); if ($exp -ne $null -and $exp.Selection.Count -ge 1) { $item = $exp.Selection.Item(1) } }
+    if ($item -ne $null -and $item.Class -eq 43) {
+        $subj = ([string]$item.Subject) -replace "[\r\n|]", " "
+        $sender = ([string]$item.SenderName) -replace "[\r\n|]", " "
+        [Console]::Out.WriteLine("OK|" + [string]$item.EntryID + "|" + $subj + "|" + $sender)
+    } else { [Console]::Out.WriteLine("NONE") }
+} catch { [Console]::Out.WriteLine("NONE") }
+'''
+
+
+def active_email():
+    """The email currently open or selected in Outlook as (entry_id, subject, sender), or None.
+    Used by the global hotkey to file whatever the user is looking at right now."""
+    if not IS_WINDOWS:
+        return None
+    out = _run_outlook_ps(_ACTIVE_EMAIL_PS, {}, show=False)
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if line.startswith("OK|"):
+            parts = line.split("|", 3)
+            if len(parts) == 4:
+                return (parts[1], parts[2], parts[3])
+    return None
+
+
 def move_email_to_folder(eid, folder):
     """Move the Inbox email with this EntryID into the named Inbox subfolder."""
     return _run_outlook_ps(_MOVE_TO_FOLDER_PS, {"OL_ID": eid, "OL_FOLDER": folder}, show=False)
