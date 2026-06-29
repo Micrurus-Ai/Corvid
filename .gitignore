@@ -20,3 +20,14 @@ assistant/__pycache__/
 assistant/*.png
 # stray temp screenshots from the screenshot feature
 axon_shot_*.png
+
+# per-user runtime state (brand, project folder, triggers) — not source
+assistant/axon_settings.json
+
+# --- packaging build artifacts (large / generated) ---
+assistant/build/
+assistant/dist/
+assistant/ocu/
+assistant/*.spec
+installer/Output/
+outlook_addin/*.dll
