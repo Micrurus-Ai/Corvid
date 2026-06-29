@@ -117,3 +117,19 @@ def stop_audio():
         winsound.PlaySound(None, winsound.SND_PURGE)
     except Exception:
         pass
+
+
+def is_silent(path, threshold=150):
+    """True if a recorded WAV is effectively silent (mic muted / blocked by Windows privacy / no
+    input device). A live mic always picks up some ambient noise above this."""
+    try:
+        import wave
+        import array
+        wf = wave.open(path, "rb")
+        raw = wf.readframes(min(wf.getnframes(), 16000 * 4))
+        wf.close()
+        a = array.array("h")
+        a.frombytes(raw)
+        return (max(abs(x) for x in a) if a else 0) < threshold
+    except Exception:
+        return False

@@ -385,9 +385,13 @@ class Composer(QtWidgets.QWidget):
         if not path:
             return
         self._voice_path = path
-        self.voice_label.setText("Voice note — transcribing…")
         self.voice_bar.show()
         self._refresh_min_height()
+        from axon.vision import is_silent
+        if is_silent(path):
+            self.voice_label.setText("No mic audio — check your microphone is on")
+            return
+        self.voice_label.setText("Voice note — transcribing…")
         import threading
 
         def work():

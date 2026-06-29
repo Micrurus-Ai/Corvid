@@ -351,25 +351,26 @@ class MicButton(QtWidgets.QPushButton):
         p = QtGui.QPainter(self)
         p.setRenderHint(QtGui.QPainter.Antialiasing)
         w, h = self.width(), self.height()
-        cx = w / 2.0
+        cx, cy = w / 2.0, h / 2.0
         if self.recording:
             p.setPen(QtCore.Qt.NoPen)
             p.setBrush(QtGui.QColor("#e0584f"))  # red "stop" square
-            s = w * 0.40
-            p.drawRoundedRect(QtCore.QRectF(cx - s / 2, h / 2 - s / 2, s, s), 3, 3)
+            s = 10.0
+            p.drawRoundedRect(QtCore.QRectF(cx - s / 2, cy - s / 2, s, s), 2.5, 2.5)
         else:
+            # Compact, centered mic — same visual size + stroke weight as the camera icon next to it.
             pen = QtGui.QPen(QtGui.QColor(MUTED))
-            pen.setWidthF(2.0)
+            pen.setWidthF(1.6)
             pen.setCapStyle(QtCore.Qt.RoundCap)
             pen.setJoinStyle(QtCore.Qt.RoundJoin)
             p.setPen(pen)
             p.setBrush(QtCore.Qt.NoBrush)
-            bw, bh, top = w * 0.30, h * 0.40, h * 0.20
-            p.drawRoundedRect(QtCore.QRectF(cx - bw / 2, top, bw, bh), bw / 2, bw / 2)  # mic body
-            aw, ah, ay = w * 0.52, bh * 1.05, top + bh * 0.30
+            bw, bh = 7.0, 8.0
+            by = cy - 7
+            p.drawRoundedRect(QtCore.QRectF(cx - bw / 2, by, bw, bh), bw / 2, bw / 2)   # capsule body
+            aw, ah = 11.0, 9.0
+            ay = by + bh - 5
             p.drawArc(QtCore.QRectF(cx - aw / 2, ay, aw, ah), 200 * 16, 140 * 16)        # cradle
-            base_y = top + bh + ah * 0.42
-            p.drawLine(QtCore.QPointF(cx, base_y), QtCore.QPointF(cx, h * 0.84))          # stand
-            p.drawLine(QtCore.QPointF(cx - w * 0.14, h * 0.84),
-                       QtCore.QPointF(cx + w * 0.14, h * 0.84))                            # foot
+            p.drawLine(QtCore.QPointF(cx, ay + ah - 1), QtCore.QPointF(cx, cy + 7))      # stand
+            p.drawLine(QtCore.QPointF(cx - 4, cy + 7), QtCore.QPointF(cx + 4, cy + 7))   # foot
         p.end()
