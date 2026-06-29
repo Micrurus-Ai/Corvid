@@ -194,17 +194,46 @@ namespace Axon.OutlookAddin
 
         private class Filing { public string[] matches = new string[0]; public string newFolder = ""; }
 
-        // Suggest folders. Fast path: call OpenAI directly in-process (no Python startup, ~1-2s).
-        // Falls back to the packaged exe / dev venv only if the key is missing or the call fails.
+        // Suggest folders via an OpenAI-COMPATIBLE chat API. `api_base` can point at OpenAI's cloud
+        // or any local server that speaks the same protocol (Ollama, vLLM, LM Studio, LocalAI, ...),
+        // so the same add-in works for cloud or fully on-site deployments — only the config differs.
+        // If the API is unreachable the picker still lists every folder; only AI ranking is skipped.
         private Filing SuggestFiling(string subject, string sender, string body, string[] folders)
         {
             var result = new Filing();
-            if (TrySuggestViaApi(subject, sender, body, folders, result)) return result;
-            return SuggestViaExe(subject, sender, body, folders);
+            try { TrySuggestViaApi(subject, sender, body, folders, result); } catch { }
+            return result;
         }
 
-        // Read the baked-in OpenAI key from the app's .env (next to the installed app / in _internal).
-        private string ApiKey()
+        private static string _apiBase, _apiKey, _model;
+
+        // Config from %APPDATA%\AxonOutlook\config.json: { api_base, api_key, model }. If no api_key
+        // is set there, fall back to the key baked into a co-located Axon app (.env) — that's the
+        // bundled-with-the-dot case. On-site deployments point api_base at their own model server.
+        private void LoadConfig()
+        {
+            _apiBase = "https://api.openai.com/v1";
+            _apiKey = "";
+            _model = "gpt-4o-mini";
+            try
+            {
+                string p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                                        "AxonOutlook", "config.json");
+                if (File.Exists(p))
+                {
+                    var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                    var d = (System.Collections.Generic.Dictionary<string, object>)js.DeserializeObject(File.ReadAllText(p));
+                    if (d.ContainsKey("api_base") && d["api_base"] != null) _apiBase = d["api_base"].ToString().TrimEnd('/');
+                    if (d.ContainsKey("api_key") && d["api_key"] != null) _apiKey = d["api_key"].ToString();
+                    if (d.ContainsKey("model") && d["model"] != null) _model = d["model"].ToString();
+                }
+            }
+            catch { }
+            if (string.IsNullOrEmpty(_apiKey)) _apiKey = BakedKey();
+        }
+
+        // Read OPENAI_API_KEY from a co-located Axon app's .env (bundled-with-the-dot deployment).
+        private string BakedKey()
         {
             try
             {
@@ -222,15 +251,14 @@ namespace Axon.OutlookAddin
                             }
             }
             catch { }
-            return null;
+            return "";
         }
 
         private bool TrySuggestViaApi(string subject, string sender, string body, string[] folders, Filing result)
         {
             try
             {
-                string key = ApiKey();
-                if (string.IsNullOrEmpty(key)) return false;
+                LoadConfig();
                 var js = new System.Web.Script.Serialization.JavaScriptSerializer();
                 string b = body ?? "";
                 if (b.Length > 1500) b = b.Substring(0, 1500);
@@ -243,16 +271,19 @@ namespace Axon.OutlookAddin
                     "folder to create (must NOT be empty in that case); if an existing folder fits, an empty string\"}";
                 var reqObj = new System.Collections.Generic.Dictionary<string, object>
                 {
-                    { "model", "gpt-4o-mini" }, { "temperature", 0 },
+                    { "model", _model },
+                    { "temperature", 0 },
+                    { "stream", false },
                     { "messages", new object[] { new System.Collections.Generic.Dictionary<string, object> { { "role", "user" }, { "content", prompt } } } }
                 };
                 System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
                 using (var http = new System.Net.Http.HttpClient())
                 {
-                    http.Timeout = TimeSpan.FromSeconds(30);
-                    http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + key);
+                    http.Timeout = TimeSpan.FromSeconds(60);
+                    if (!string.IsNullOrEmpty(_apiKey))
+                        http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + _apiKey);
                     var content = new System.Net.Http.StringContent(js.Serialize(reqObj), System.Text.Encoding.UTF8, "application/json");
-                    var resp = http.PostAsync("https://api.openai.com/v1/chat/completions", content).Result;
+                    var resp = http.PostAsync(_apiBase + "/chat/completions", content).Result;
                     string s = resp.Content.ReadAsStringAsync().Result;
                     if (!resp.IsSuccessStatusCode) return false;
                     var d = (System.Collections.Generic.Dictionary<string, object>)js.DeserializeObject(s);
@@ -292,61 +323,6 @@ namespace Axon.OutlookAddin
             }
             if (matches.Count > 3) matches = matches.GetRange(0, 3);
             result.matches = matches.ToArray();
-        }
-
-        // Fallback: let the packaged exe (or dev venv) compute the suggestion in Python.
-        private Filing SuggestViaExe(string subject, string sender, string body, string[] folders)
-        {
-            var result = new Filing();
-            try
-            {
-                string dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);   // ...\addin (or dev outlook_addin)
-                string root = Path.GetFullPath(Path.Combine(dir, ".."));                         // Axon root
-                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
-                string tmp = Path.Combine(Path.GetTempPath(), "axon_rank_" + Guid.NewGuid().ToString("N") + ".json");
-                var payload = new System.Collections.Generic.Dictionary<string, object>
-                { { "subject", subject }, { "sender", sender }, { "body", body }, { "folders", folders } };
-                File.WriteAllText(tmp, js.Serialize(payload), new System.Text.UTF8Encoding(false));
-
-                // Prefer the packaged app (installed); fall back to the dev venv + agent.py.
-                System.Diagnostics.ProcessStartInfo psi;
-                string exe = Path.Combine(root, "AxonIntelligence.exe");
-                if (File.Exists(exe))
-                {
-                    psi = new System.Diagnostics.ProcessStartInfo(exe) { Arguments = "--suggest \"" + tmp + "\"" };
-                }
-                else
-                {
-                    string py = Path.Combine(root, "assistant", ".venv", "Scripts", "python.exe");
-                    if (!File.Exists(py)) { try { File.Delete(tmp); } catch { } return result; }
-                    psi = new System.Diagnostics.ProcessStartInfo(py)
-                    {
-                        Arguments = "-c \"import sys,json,agent; d=json.load(open(sys.argv[1],encoding='utf-8')); print(json.dumps(agent.suggest_filing(d['subject'],d['sender'],d['body'],d['folders'])))\" \"" + tmp + "\"",
-                        WorkingDirectory = Path.Combine(root, "assistant")
-                    };
-                }
-                psi.UseShellExecute = false;
-                psi.RedirectStandardOutput = true;
-                psi.CreateNoWindow = true;
-                string outp;
-                using (var p = System.Diagnostics.Process.Start(psi)) { outp = p.StandardOutput.ReadToEnd(); p.WaitForExit(25000); }
-                try { File.Delete(tmp); } catch { }
-                int b = outp.IndexOf('{'); int e = outp.LastIndexOf('}');
-                if (b >= 0 && e > b)
-                {
-                    var d = (System.Collections.Generic.Dictionary<string, object>)js.DeserializeObject(outp.Substring(b, e - b + 1));
-                    if (d.ContainsKey("matches") && d["matches"] is object[])
-                    {
-                        var arr = (object[])d["matches"];
-                        var list = new System.Collections.Generic.List<string>();
-                        foreach (var x in arr) if (x != null) list.Add(x.ToString());
-                        result.matches = list.ToArray();
-                    }
-                    if (d.ContainsKey("new_folder") && d["new_folder"] != null) result.newFolder = d["new_folder"].ToString();
-                }
-            }
-            catch { }
-            return result;
         }
 
         // Create (or reuse) a top-level Inbox subfolder by name; returns the folder or null.

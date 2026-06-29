@@ -338,7 +338,7 @@ class MicButton(QtWidgets.QPushButton):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(CONTROL_ICON_SIZE, CONTROL_ICON_SIZE)
+        self.setFixedSize(30, 26)
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.setStyleSheet("QPushButton{background:transparent;border:none;}")
         self.recording = False
