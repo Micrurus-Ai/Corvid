@@ -40,8 +40,11 @@ Name: "startup";     Description: "Start Axon when I sign in to Windows"; GroupD
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; The Outlook add-in DLL + icons.
 Source: "{#AddinDir}\AxonAddin.dll";     DestDir: "{app}\addin"; Flags: ignoreversion
-Source: "{#AddinDir}\axon-move.png";     DestDir: "{app}\addin"; Flags: ignoreversion
-Source: "{#AddinDir}\axon-download.png"; DestDir: "{app}\addin"; Flags: ignoreversion
+Source: "{#AddinDir}\axon-move.png";      DestDir: "{app}\addin"; Flags: ignoreversion
+Source: "{#AddinDir}\axon-download.png";  DestDir: "{app}\addin"; Flags: ignoreversion
+Source: "{#AddinDir}\axon-summarize.png"; DestDir: "{app}\addin"; Flags: ignoreversion
+Source: "{#AddinDir}\axon-reply.png";     DestDir: "{app}\addin"; Flags: ignoreversion
+Source: "{#AddinDir}\axon-schedule.png";  DestDir: "{app}\addin"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"

@@ -59,18 +59,22 @@ namespace Axon.OutlookAddin
                    "<contextMenus>" + menus + "</contextMenus></customUI>";
         }
 
-        // Axon's two right-click items for a given Office context-menu id (button ids must be unique).
+        // Axon's right-click items for a given Office context-menu id (button ids must be unique).
+        // Summarize/Reply have no icon (avoids any invalid-image risk); Move/Download keep theirs.
         private string CtxMenu(string idMso)
         {
             return "<contextMenu idMso='" + idMso + "'>" +
                    "<menuSeparator id='axonSep_" + idMso + "'/>" +
+                   "<button id='axonSummarize_" + idMso + "' label='Summarize with Axon' getImage='GetSummarizeImage' onAction='OnSummarize'/>" +
+                   "<button id='axonReply_" + idMso + "' label='Reply with Axon' getImage='GetReplyImage' onAction='OnReply'/>" +
+                   "<button id='axonSchedule_" + idMso + "' label='Schedule with Axon' getImage='GetScheduleImage' onAction='OnSchedule'/>" +
                    "<button id='axonMove_" + idMso + "' label='Move with Axon' getImage='GetMoveImage' onAction='OnFile'/>" +
                    "<button id='axonDownload_" + idMso + "' label='Download with Axon' getImage='GetDownloadImage' onAction='OnDownload'/>" +
                    "</contextMenu>";
         }
 
         // --- custom ribbon image (the Axon-branded Move icon, distinct from Outlook's built-ins) ---
-        private System.Drawing.Image _moveIcon, _downloadIcon;
+        private System.Drawing.Image _moveIcon, _downloadIcon, _summarizeIcon, _replyIcon, _scheduleIcon;
 
         private System.Drawing.Image LoadIcon(string file, ref System.Drawing.Image cache)
         {
@@ -91,6 +95,21 @@ namespace Axon.OutlookAddin
         public stdole.IPictureDisp GetDownloadImage(object control)
         {
             try { return RibbonImage.Get(LoadIcon("axon-download.png", ref _downloadIcon)); } catch { return null; }
+        }
+
+        public stdole.IPictureDisp GetSummarizeImage(object control)
+        {
+            try { return RibbonImage.Get(LoadIcon("axon-summarize.png", ref _summarizeIcon)); } catch { return null; }
+        }
+
+        public stdole.IPictureDisp GetReplyImage(object control)
+        {
+            try { return RibbonImage.Get(LoadIcon("axon-reply.png", ref _replyIcon)); } catch { return null; }
+        }
+
+        public stdole.IPictureDisp GetScheduleImage(object control)
+        {
+            try { return RibbonImage.Get(LoadIcon("axon-schedule.png", ref _scheduleIcon)); } catch { return null; }
         }
 
         // --- ribbon button callbacks (Office invokes these by name via IDispatch) ---
@@ -254,52 +273,61 @@ namespace Axon.OutlookAddin
             return "";
         }
 
-        private bool TrySuggestViaApi(string subject, string sender, string body, string[] folders, Filing result)
+        // One OpenAI-compatible chat call -> the assistant's text (or null). Shared by suggest,
+        // summarize, and reply. Provider/model/base/key come from LoadConfig().
+        private string ModelComplete(string prompt, double temperature)
         {
             try
             {
                 LoadConfig();
                 var js = new System.Web.Script.Serialization.JavaScriptSerializer();
-                string b = body ?? "";
-                if (b.Length > 1500) b = b.Substring(0, 1500);
-                string prompt =
-                    "You are filing an email into one of the user's Outlook folders.\n\n" +
-                    "Email\n  Subject: " + subject + "\n  From: " + sender + "\n  Body (truncated):\n" + b + "\n\n" +
-                    "The user's folders (name, with full path for nested ones):\n" + js.Serialize(folders) + "\n\n" +
-                    "Decide based on what the email is ABOUT and WHO it is from. Pick the folder whose name/path " +
-                    "most closely matches that topic; the sender's company/domain is a strong hint. List the " +
-                    "best-fitting folders first (up to 3), but ONLY include a folder that is a genuinely good fit " +
-                    "(do not pad the list). If none clearly fit, leave matches empty and propose a short new folder.\n" +
-                    "Reply with ONLY JSON: {\"matches\": [up to 3 folder names copied EXACTLY from the list, best " +
-                    "first], \"new_folder\": \"a short (1-3 word) new folder name if nothing fits, else an empty string\"}";
                 var reqObj = new System.Collections.Generic.Dictionary<string, object>
                 {
                     { "model", _model },
-                    { "temperature", 0 },
+                    { "temperature", temperature },
                     { "stream", false },
                     { "messages", new object[] { new System.Collections.Generic.Dictionary<string, object> { { "role", "user" }, { "content", prompt } } } }
                 };
                 System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
                 using (var http = new System.Net.Http.HttpClient())
                 {
-                    http.Timeout = TimeSpan.FromSeconds(60);
+                    http.Timeout = TimeSpan.FromSeconds(90);
                     if (!string.IsNullOrEmpty(_apiKey))
                         http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + _apiKey);
                     var content = new System.Net.Http.StringContent(js.Serialize(reqObj), System.Text.Encoding.UTF8, "application/json");
                     var resp = http.PostAsync(_apiBase + "/chat/completions", content).Result;
-                    string s = resp.Content.ReadAsStringAsync().Result;
-                    if (!resp.IsSuccessStatusCode) return false;
-                    var d = (System.Collections.Generic.Dictionary<string, object>)js.DeserializeObject(s);
+                    if (!resp.IsSuccessStatusCode) return null;
+                    var d = (System.Collections.Generic.Dictionary<string, object>)js.DeserializeObject(resp.Content.ReadAsStringAsync().Result);
                     var choices = d.ContainsKey("choices") ? d["choices"] as object[] : null;
-                    if (choices == null || choices.Length == 0) return false;
+                    if (choices == null || choices.Length == 0) return null;
                     var msg = (System.Collections.Generic.Dictionary<string, object>)((System.Collections.Generic.Dictionary<string, object>)choices[0])["message"];
-                    var mt = System.Text.RegularExpressions.Regex.Match(msg["content"].ToString(), "\\{[\\s\\S]*\\}");
-                    if (!mt.Success) return false;
-                    ParseSuggestion(mt.Value, folders, result, js);
-                    return true;
+                    return (msg != null && msg.ContainsKey("content") && msg["content"] != null) ? msg["content"].ToString() : null;
                 }
             }
-            catch { return false; }
+            catch { return null; }
+        }
+
+        private bool TrySuggestViaApi(string subject, string sender, string body, string[] folders, Filing result)
+        {
+            var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+            string b = body ?? "";
+            if (b.Length > 1500) b = b.Substring(0, 1500);
+            string prompt =
+                "You are filing an email into one of the user's Outlook folders.\n\n" +
+                "Email\n  Subject: " + subject + "\n  From: " + sender + "\n  Body (truncated):\n" + b + "\n\n" +
+                "The user's folders (name, with full path for nested ones):\n" + js.Serialize(folders) + "\n\n" +
+                "Decide based on what the email is ABOUT and WHO it is from. Pick the folder whose name/path " +
+                "most closely matches that topic; the sender's company/domain is a strong hint. List the " +
+                "best-fitting folders first (up to 3), but ONLY include a folder that is a genuinely good fit " +
+                "(do not pad the list). If none clearly fit, leave matches empty and propose a short new folder.\n" +
+                "Reply with ONLY JSON: {\"matches\": [up to 3 folder names copied EXACTLY from the list, best " +
+                "first], \"new_folder\": \"a short (1-3 word) new folder name if nothing fits, else an empty string\"}";
+            string text = ModelComplete(prompt, 0);
+            if (string.IsNullOrEmpty(text)) return false;
+            var mt = System.Text.RegularExpressions.Regex.Match(text, "\\{[\\s\\S]*\\}");
+            if (!mt.Success) return false;
+            ParseSuggestion(mt.Value, folders, result, js);
+            return true;
         }
 
         // Map the model's JSON onto the real folder names (case-insensitive); if it "invents" a new
@@ -438,6 +466,247 @@ namespace Axon.OutlookAddin
             return null;
         }
 
+        public void OnSummarize(object control)
+        {
+            try
+            {
+                object m = GetSelectedMail();
+                if (m == null) { Ui.Notify("Select an email first.", "Axon intelligence"); return; }
+                dynamic mail = m;
+                string subj = ""; try { subj = (string)mail.Subject; } catch { }
+                string body = ""; try { body = (string)mail.Body; } catch { }
+                if (body.Length > 6000) body = body.Substring(0, 6000);
+                string bodyCopy = body;
+                bool wantsReply;
+                using (var dlg = new SummaryDialog(subj,
+                    lang => ModelComplete(BuildSummaryPrompt(subj, bodyCopy, lang), 0.3)))
+                {
+                    dlg.ShowDialog();
+                    wantsReply = dlg.WantsReply;
+                }
+                if (wantsReply) OnReply(control);   // jump straight into the reply flow on the same email
+            }
+            catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
+        }
+
+        private string BuildSummaryPrompt(string subject, string body, string lang)
+        {
+            string langLine = string.IsNullOrEmpty(lang)
+                ? "Write the summary in the same language as the email."
+                : "Write the summary in " + lang + ".";
+            return "Summarize this email for a busy reader in PLAIN TEXT only — no markdown, no asterisks, " +
+                "no '#'. Use exactly this layout, with blank lines between sections:\n\nGist: <one sentence>\n\n" +
+                "Key points:\n- <point>\n- <point>\n\nAction: <what the reader should do, or 'None'>\n\n" +
+                langLine + " Keep it tight.\n\nSubject: " + subject + "\n\n" + body;
+        }
+
+        public void OnReply(object control)
+        {
+            try
+            {
+                object m = GetSelectedMail();
+                if (m == null) { Ui.Notify("Select an email first.", "Axon intelligence"); return; }
+                dynamic mail = m;
+                string subj = ""; try { subj = (string)mail.Subject; } catch { }
+                string sender = ""; try { sender = (string)mail.SenderName; } catch { }
+                string body = ""; try { body = (string)mail.Body; } catch { }
+                if (body.Length > 6000) body = body.Substring(0, 6000);
+                string me = ""; try { me = (string)((dynamic)_app).Session.CurrentUser.Name; } catch { }
+                string bodyCopy = body;
+                // Ask the user HOW they want to reply, then Axon drafts to that instruction.
+                string draft;
+                using (var prompt = new ReplyPrompt(subj,
+                    (instr, lang) => ModelComplete(BuildReplyPrompt(subj, sender, bodyCopy, instr, me, lang), 0.4)))
+                {
+                    if (prompt.ShowDialog() != DialogResult.OK) return;
+                    draft = prompt.Draft;
+                }
+                if (string.IsNullOrEmpty(draft)) { Ui.Notify("Couldn't draft a reply (model unavailable).", "Axon intelligence"); return; }
+                dynamic reply = mail.Reply();
+                // Draft at the top, a horizontal line, then Outlook's quoted original (keeps formatting).
+                try
+                {
+                    string html = (string)reply.HTMLBody;
+                    // No <hr> here — Outlook's reply already has its own divider above the quoted original.
+                    string draftHtml = "<div style='font-family:Calibri,sans-serif;font-size:11pt;'>" +
+                        ToHtml(draft) + "<br></div>";
+                    int bi = html.IndexOf("<body", StringComparison.OrdinalIgnoreCase);
+                    int gt = bi >= 0 ? html.IndexOf('>', bi) : -1;
+                    reply.HTMLBody = gt >= 0 ? html.Substring(0, gt + 1) + draftHtml + html.Substring(gt + 1)
+                                             : draftHtml + html;
+                }
+                catch { try { reply.Body = draft; } catch { } }
+                reply.Display();   // open the draft for the user to review + send (never auto-sent)
+            }
+            catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
+        }
+
+        // Plain text -> minimal HTML (escape + line breaks) for inserting into the reply.
+        private static string ToHtml(string text)
+        {
+            string e = (text ?? "").Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+            return e.Replace("\r\n", "\n").Replace("\n", "<br>");
+        }
+
+        private string BuildReplyPrompt(string subject, string sender, string body, string instruction, string me, string lang)
+        {
+            string how = string.IsNullOrWhiteSpace(instruction)
+                ? "Write a concise, professional, courteous reply that addresses the points raised."
+                : "Write the reply following these instructions from the user: " + instruction;
+            string langLine = string.IsNullOrEmpty(lang)
+                ? "Write the reply in the SAME language as the email."
+                : "Write the ENTIRE reply (greeting, message, and sign-off) in " + lang + ", regardless of the email's language.";
+            return how + " Begin with an appropriate greeting addressed to the sender by first name, and end " +
+                   "with a courteous sign-off" + (string.IsNullOrWhiteSpace(me) ? "" : " from " + me) + ". " +
+                   langLine + " Use a natural tone. Output ONLY the reply text itself (greeting, message, " +
+                   "sign-off) — no subject line and no quoted original.\n\n" +
+                   "Sender: " + sender + "\nSubject: " + subject + "\n\n" + body;
+        }
+
+        public void OnSchedule(object control)
+        {
+            try
+            {
+                object m = GetSelectedMail();
+                if (m == null) { Ui.Notify("Select an email first.", "Axon intelligence"); return; }
+                dynamic mail = m;
+                string subj = ""; try { subj = (string)mail.Subject; } catch { }
+                string sender = ""; try { sender = (string)mail.SenderName; } catch { }
+                string body = ""; try { body = (string)mail.Body; } catch { }
+                if (body.Length > 6000) body = body.Substring(0, 6000);
+                // Ask the user WHEN (any timeframe — "next Tue 2pm", "week of 15 Sept", "in 3 months",
+                // or blank to suggest soon) and how long. Axon then drafts the invite to match.
+                string when; int dur;
+                using (var sp = new SchedulePrompt(subj))
+                {
+                    if (sp.ShowDialog() != DialogResult.OK) return;
+                    when = sp.When; dur = sp.DurationMinutes;
+                }
+                string today = DateTime.Now.ToString("yyyy-MM-dd (dddd)");
+                string busy = MyBusyBlocks((dynamic)_app, 14);   // next 2 weeks, for near-term conflict checks
+                string text = ModelComplete(BuildSchedulePrompt(subj, sender, body, today, busy, when), 0.2);
+                if (string.IsNullOrEmpty(text)) { Ui.Notify("Couldn't propose a meeting (model unavailable).", "Axon intelligence"); return; }
+                var mt = System.Text.RegularExpressions.Regex.Match(text, "\\{[\\s\\S]*\\}");
+                if (!mt.Success) { Ui.Notify("Couldn't read the proposed meeting details.", "Axon intelligence"); return; }
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var d = (System.Collections.Generic.Dictionary<string, object>)js.DeserializeObject(mt.Value);
+
+                string mSubject = Field(d, "subject");
+                if (string.IsNullOrWhiteSpace(mSubject)) mSubject = "Meeting: " + subj;
+                DateTime start;
+                if (!DateTime.TryParse(Field(d, "start"), System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out start))
+                    start = DateTime.Now.Date.AddDays(1).AddHours(10);
+                string loc = Field(d, "location");
+                string agenda = Field(d, "agenda");
+
+                dynamic app = _app;
+                dynamic appt = app.CreateItem(1);   // olAppointmentItem
+                appt.MeetingStatus = 1;             // olMeeting -> a sendable invite
+                appt.Subject = mSubject;
+                appt.Start = start;
+                appt.Duration = dur;
+                if (!string.IsNullOrEmpty(loc)) appt.Location = loc;
+                if (!string.IsNullOrEmpty(agenda)) appt.Body = agenda;
+                // Invite everyone on the email: sender + To as Required, Cc as Optional (minus yourself).
+                string meSmtp = ""; try { meSmtp = SmtpOf(app.Session.CurrentUser.AddressEntry); } catch { }
+                var seen = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (!string.IsNullOrEmpty(meSmtp)) seen.Add(meSmtp);
+                Action<string, int> addAttendee = (addr, type) =>
+                {
+                    if (string.IsNullOrEmpty(addr) || !seen.Add(addr)) return;
+                    try { dynamic rr = appt.Recipients.Add(addr); rr.Type = type; } catch { }
+                };
+                try { addAttendee(SmtpOf(mail.Sender), 1); } catch { }            // sender -> Required
+                try
+                {
+                    foreach (dynamic r in mail.Recipients)
+                    {
+                        string a = ""; try { a = SmtpOf(r.AddressEntry); } catch { }
+                        if (string.IsNullOrEmpty(a)) { try { a = (string)r.Address; } catch { } }
+                        int t = 1; try { t = (int)r.Type; } catch { }            // mail: 1=To, 2=Cc, 3=Bcc
+                        addAttendee(a, t == 2 ? 2 : 1);                           // Cc -> Optional, else Required
+                    }
+                }
+                catch { }
+                try { appt.Recipients.ResolveAll(); } catch { }
+                // Single clean window: the pre-filled invite (already at a free time). Outlook's own
+                // Scheduling Assistant inside it shows everyone's free/busy if the user wants to adjust.
+                appt.Display();   // review + send (never auto-sent)
+            }
+            catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
+        }
+
+        private static string Field(System.Collections.Generic.Dictionary<string, object> d, string k)
+        {
+            return (d != null && d.ContainsKey(k) && d[k] != null) ? d[k].ToString() : "";
+        }
+
+        // Resolve a sender/recipient AddressEntry to its SMTP address (handles Exchange senders).
+        private static string SmtpOf(dynamic ae)
+        {
+            try
+            {
+                if (ae == null) return "";
+                try { dynamic eu = ae.GetExchangeUser(); if (eu != null) { string s = (string)eu.PrimarySmtpAddress; if (!string.IsNullOrEmpty(s)) return s; } } catch { }
+                try { dynamic pa = ae.PropertyAccessor; string s = (string)pa.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x39FE001F"); if (!string.IsNullOrEmpty(s)) return s; } catch { }
+                try { string s = (string)ae.Address; if (!string.IsNullOrEmpty(s)) return s; } catch { }
+            }
+            catch { }
+            return "";
+        }
+
+        private string BuildSchedulePrompt(string subject, string sender, string body, string today, string busy, string when)
+        {
+            string target = string.IsNullOrWhiteSpace(when)
+                ? "Pick the soonest suitable time during business hours (Mon–Fri, 09:00–17:00)."
+                : "The user wants the meeting around: \"" + when + "\". Resolve that relative to today into a " +
+                  "concrete date and time during business hours (Mon–Fri, 09:00–17:00).";
+            string avail = string.IsNullOrEmpty(busy)
+                ? ""
+                : " If the chosen time falls within the next 2 weeks, do NOT overlap these busy blocks:\n" + busy;
+            return "Read this email and propose a meeting with the sender. Today is " + today + ". " + target +
+                avail + "\nIf the email itself proposes a specific time and it fits, prefer that.\n\n" +
+                "Reply with ONLY JSON:\n{\"subject\": \"a clear meeting title\", " +
+                "\"start\": \"YYYY-MM-DDTHH:MM\" (24h), \"location\": \"a place, or 'Microsoft Teams', or empty\", " +
+                "\"agenda\": \"a short 1-3 line agenda\"}.\n\n" +
+                "From: " + sender + "\nSubject: " + subject + "\n\n" + body;
+        }
+
+        // The user's busy blocks over the next `days` days (recurrences expanded), for conflict-free
+        // scheduling. Best-effort: returns "" if the calendar can't be read.
+        private static string MyBusyBlocks(dynamic app, int days)
+        {
+            try
+            {
+                dynamic items = app.Session.GetDefaultFolder(9).Items;   // 9 = olFolderCalendar
+                items.IncludeRecurrences = true;
+                items.Sort("[Start]");
+                DateTime from = DateTime.Now;
+                DateTime to = from.AddDays(days);
+                var ci = System.Globalization.CultureInfo.CurrentCulture;
+                string filter = "[Start] < '" + to.ToString("g", ci) + "' AND [End] > '" + from.ToString("g", ci) + "'";
+                var sb = new System.Text.StringBuilder();
+                int n = 0;
+                foreach (dynamic a in items.Restrict(filter))
+                {
+                    try
+                    {
+                        DateTime s = (DateTime)a.Start;
+                        DateTime e = (DateTime)a.End;
+                        bool allday = false; try { allday = (bool)a.AllDayEvent; } catch { }
+                        string subj = ""; try { subj = (string)a.Subject; } catch { }
+                        sb.AppendLine("- " + s.ToString("ddd yyyy-MM-dd HH:mm") + "-" + e.ToString("HH:mm") +
+                            (allday ? " (all day)" : "") + (string.IsNullOrEmpty(subj) ? "" : " : " + subj));
+                    }
+                    catch { }
+                    if (++n >= 60) break;
+                }
+                return sb.ToString().Trim();
+            }
+            catch { return ""; }
+        }
+
         // --- COM (de)registration: add/remove the Outlook add-in registry entry ---
         private const string AddinKey = @"Software\Microsoft\Office\Outlook\AddIns\Axon.OutlookAddin";
 
@@ -553,6 +822,189 @@ namespace Axon.OutlookAddin
 
     // Move dialog — suggested folders, create-new-folder, and a searchable list. Opens instantly;
     // suggestions fill in async.
+    // Resizable summary dialog: pick the language (re-summarizes on change), and a Reply button to
+    // jump straight into composing a reply to the same email.
+    internal class SummaryDialog : Form
+    {
+        private readonly TextBox _box;
+        private readonly ComboBox _lang;
+        private readonly Func<string, string> _summarize;   // language -> summary text
+        public bool WantsReply { get; private set; }
+
+        public SummaryDialog(string subject, Func<string, string> summarize)
+        {
+            _summarize = summarize;
+            Text = "Axon intelligence — Summary";
+            StartPosition = FormStartPosition.CenterScreen;
+            ClientSize = new System.Drawing.Size(540, 460);
+            MinimumSize = new System.Drawing.Size(440, 320);
+            MaximizeBox = true; MinimizeBox = false; ShowIcon = false;
+            BackColor = System.Drawing.Color.White;
+
+            var langLbl = new Label { Left = 16, Top = 16, Width = 80, Height = 24, Text = "Summary in:",
+                TextAlign = System.Drawing.ContentAlignment.MiddleLeft, Anchor = AnchorStyles.Top | AnchorStyles.Left };
+            _lang = new ComboBox { Left = 100, Top = 13, Width = 200, Height = 24,
+                DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Top | AnchorStyles.Left };
+            _lang.Items.AddRange(new object[] { "Auto (match the email)", "English", "Nederlands (Dutch)", "Français (French)" });
+            _lang.SelectedIndex = 0;
+            _lang.SelectedIndexChanged += (o, e) => Regenerate();
+            _box = new TextBox { Left = 16, Top = 48, Width = ClientSize.Width - 32, Height = ClientSize.Height - 100,
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.FixedSingle,
+                Text = "Summarizing…", Font = new System.Drawing.Font("Segoe UI", 9.75f), BackColor = System.Drawing.Color.White };
+            var reply = new Button { Text = "Reply", Width = 90, Height = 28,
+                Left = ClientSize.Width - 200, Top = ClientSize.Height - 40, Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
+            var close = new Button { Text = "Close", Width = 90, Height = 28, DialogResult = DialogResult.Cancel,
+                Left = ClientSize.Width - 104, Top = ClientSize.Height - 40, Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
+            reply.Click += (o, e) => { WantsReply = true; DialogResult = DialogResult.OK; Close(); };
+            Controls.AddRange(new Control[] { langLbl, _lang, _box, reply, close });
+            CancelButton = close;
+            Shown += (o, e) => Regenerate();
+        }
+
+        private static string LangCode(string display)
+        {
+            if (display.StartsWith("Eng")) return "English";
+            if (display.StartsWith("Ned")) return "Dutch";
+            if (display.StartsWith("Fr")) return "French";
+            return "";   // Auto -> match the email
+        }
+
+        private void Regenerate()
+        {
+            string lang = LangCode(_lang.SelectedItem.ToString());
+            SetText("Summarizing…");
+            var th = new System.Threading.Thread(() =>
+            {
+                string s = _summarize(lang);
+                SetText(string.IsNullOrEmpty(s) ? "Couldn't summarize (model unavailable)." : s);
+            });
+            th.IsBackground = true;
+            th.Start();
+        }
+
+        private void SetText(string s)
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired) { try { BeginInvoke(new Action(() => SetText(s))); } catch { } return; }
+            // Strip any stray markdown bold, and use CRLF so the TextBox shows line breaks.
+            _box.Text = (s ?? "").Replace("**", "").Replace("\r\n", "\n").Replace("\n", "\r\n");
+            _box.Select(0, 0);
+        }
+    }
+
+    // Asks the user HOW to reply + in which language, then drafts it (off the UI thread).
+    internal class ReplyPrompt : Form
+    {
+        private readonly TextBox _box;
+        private readonly ComboBox _lang;
+        private readonly Func<string, string, string> _drafter;   // (instruction, language) -> draft
+        private readonly Button _draftBtn;
+        private readonly Label _status;
+        public string Draft { get; private set; }
+
+        public ReplyPrompt(string subject, Func<string, string, string> drafter)
+        {
+            _drafter = drafter;
+            Text = "Axon intelligence — Reply";
+            StartPosition = FormStartPosition.CenterScreen;
+            ClientSize = new System.Drawing.Size(500, 318);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false; MinimizeBox = false; ShowIcon = false;
+            BackColor = System.Drawing.Color.White;
+
+            var t1 = new Label { Left = 20, Top = 18, Width = 460, Height = 20, Text = "Reply to: " + subject,
+                Font = new System.Drawing.Font("Segoe UI", 10f, System.Drawing.FontStyle.Bold), AutoEllipsis = true };
+            var t2 = new Label { Left = 20, Top = 48, Width = 460, Height = 20,
+                Text = "Tell Axon how to reply (or leave blank for a professional reply):",
+                ForeColor = System.Drawing.Color.FromArgb(110, 110, 120) };
+            _box = new TextBox { Left = 20, Top = 74, Width = 460, Height = 110, Multiline = true,
+                ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.FixedSingle,
+                Font = new System.Drawing.Font("Segoe UI", 9.75f) };
+            var langLbl = new Label { Left = 20, Top = 200, Width = 60, Height = 22, Text = "Reply in:",
+                TextAlign = System.Drawing.ContentAlignment.MiddleLeft };
+            _lang = new ComboBox { Left = 82, Top = 197, Width = 200, Height = 24, DropDownStyle = ComboBoxStyle.DropDownList };
+            _lang.Items.AddRange(new object[] { "Auto (match the email)", "English", "Nederlands (Dutch)", "Français (French)" });
+            _lang.SelectedIndex = 0;
+            _status = new Label { Left = 20, Top = 240, Width = 260, Height = 20, Text = "",
+                ForeColor = System.Drawing.Color.FromArgb(110, 110, 120) };
+            _draftBtn = new Button { Text = "Draft reply", Left = 300, Top = 272, Width = 110, Height = 28 };
+            var cancel = new Button { Text = "Cancel", Left = 415, Top = 272, Width = 65, Height = 28, DialogResult = DialogResult.Cancel };
+            _draftBtn.Click += (o, e) => DoDraft();
+            Controls.AddRange(new Control[] { t1, t2, _box, langLbl, _lang, _status, _draftBtn, cancel });
+            AcceptButton = _draftBtn;
+            CancelButton = cancel;
+        }
+
+        private static string LangCode(string display)
+        {
+            if (display.StartsWith("Eng")) return "English";
+            if (display.StartsWith("Ned")) return "Dutch";
+            if (display.StartsWith("Fr")) return "French";
+            return "";   // Auto -> match the email
+        }
+
+        private void DoDraft()
+        {
+            _draftBtn.Enabled = false;
+            _status.Text = "Drafting…";
+            string instr = _box.Text;
+            string lang = LangCode(_lang.SelectedItem.ToString());
+            var th = new System.Threading.Thread(() =>
+            {
+                string d = _drafter(instr, lang);
+                try { BeginInvoke(new Action(() => { Draft = d; DialogResult = DialogResult.OK; Close(); })); } catch { }
+            });
+            th.IsBackground = true;
+            th.Start();
+        }
+    }
+
+    // Asks the user WHEN to schedule (any timeframe, free text) + the duration, before Axon drafts the invite.
+    internal class SchedulePrompt : Form
+    {
+        private static readonly int[] Durations = { 15, 30, 45, 60, 90, 120 };
+        private readonly TextBox _when;
+        private readonly ComboBox _dur;
+        public string When { get; private set; }
+        public int DurationMinutes { get; private set; }
+
+        public SchedulePrompt(string subject)
+        {
+            Text = "Axon intelligence — Schedule";
+            StartPosition = FormStartPosition.CenterScreen;
+            ClientSize = new System.Drawing.Size(500, 250);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false; MinimizeBox = false; ShowIcon = false;
+            BackColor = System.Drawing.Color.White;
+
+            var t1 = new Label { Left = 20, Top = 18, Width = 460, Height = 20, Text = "Meeting about: " + subject,
+                Font = new System.Drawing.Font("Segoe UI", 10f, System.Drawing.FontStyle.Bold), AutoEllipsis = true };
+            var t2 = new Label { Left = 20, Top = 48, Width = 460, Height = 36,
+                Text = "When? e.g. \"next Tuesday 2pm\", \"week of 15 Sept\", \"in 3 months\" — or leave blank to suggest the soonest free time:",
+                ForeColor = System.Drawing.Color.FromArgb(110, 110, 120) };
+            _when = new TextBox { Left = 20, Top = 88, Width = 460, Height = 26, BorderStyle = BorderStyle.FixedSingle,
+                Font = new System.Drawing.Font("Segoe UI", 9.75f) };
+            var durLbl = new Label { Left = 20, Top = 132, Width = 64, Height = 22, Text = "Duration:",
+                TextAlign = System.Drawing.ContentAlignment.MiddleLeft };
+            _dur = new ComboBox { Left = 86, Top = 129, Width = 160, Height = 24, DropDownStyle = ComboBoxStyle.DropDownList };
+            _dur.Items.AddRange(new object[] { "15 minutes", "30 minutes", "45 minutes", "1 hour", "1.5 hours", "2 hours" });
+            _dur.SelectedIndex = 1;   // 30 minutes
+            var create = new Button { Text = "Create invite", Left = 300, Top = 200, Width = 110, Height = 28 };
+            var cancel = new Button { Text = "Cancel", Left = 415, Top = 200, Width = 65, Height = 28, DialogResult = DialogResult.Cancel };
+            create.Click += (o, e) =>
+            {
+                When = _when.Text.Trim();
+                int i = _dur.SelectedIndex;
+                DurationMinutes = (i >= 0 && i < Durations.Length) ? Durations[i] : 30;
+                DialogResult = DialogResult.OK; Close();
+            };
+            Controls.AddRange(new Control[] { t1, t2, _when, durLbl, _dur, create, cancel });
+            AcceptButton = create;
+            CancelButton = cancel;
+        }
+    }
+
     internal class FolderPicker : Form
     {
         public string Chosen;

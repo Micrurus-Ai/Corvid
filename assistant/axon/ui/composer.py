@@ -16,6 +16,7 @@ class Composer(QtWidgets.QWidget):
     voice_text = QtCore.Signal(str)  # transcribed speech -> input box (emitted from a worker thread)
     QUICK_ACTIONS = [
         ("Brief me on my day", "Give me my daily briefing."),
+        ("What needs my attention", "Triage my unread inbox — what needs my attention?"),
         ("Make a branded deck", "Create a branded PowerPoint deck about "),
         ("Research a website + email report", "Research this website and email me a one-page report: "),
         ("Ask my documents", "Based on my project documents, "),

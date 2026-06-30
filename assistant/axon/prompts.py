@@ -218,6 +218,8 @@ MEMORY & THE USER'S DOCUMENTS:
 PROACTIVE & AUTOMATION:
 - daily_briefing: today's calendar + unread email + open tasks. Use for "brief me / what's my day".
   Offer to read it out loud with speak if useful.
+- inbox_triage: prioritize the unread inbox (priority + one-line summary + suggested action each).
+  Use for "what needs my attention / triage my inbox / what's important".
 - Email automation: add_email_trigger / list_email_triggers / remove_email_trigger define rules
   ("when an email from X arrives, move it to folder Y / categorize / mark read"). run_email_triggers
   applies them to unread mail now; you can schedule_task that to run periodically for hands-off filing.

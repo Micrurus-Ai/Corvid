@@ -15,7 +15,7 @@ from axon.outlook import (
 )
 from axon.memory import remember, recall, forget
 from axon.knowledge import set_project, ask_documents
-from axon.briefing import daily_briefing
+from axon.briefing import daily_briefing, inbox_triage
 from axon.triggers import add_email_trigger, list_email_triggers, remove_email_trigger, run_email_triggers
 from axon.vision import ocr_image
 
@@ -555,6 +555,10 @@ TOOLS += [
         "Summarize the user's day from Outlook: today's calendar events, unread email (count + top "
         "senders), and open tasks. Use for 'what's my day / brief me / morning summary'.",
         {}, []),
+    _fn("inbox_triage",
+        "Triage the unread inbox: order emails by importance, each with a priority, one-line summary, "
+        "and suggested action. Use for 'what needs my attention / triage my inbox'.",
+        {}, []),
     _fn("add_email_trigger",
         "Add an automation rule: when an unread inbox email matches (from and/or subject_contains), "
         "do an action. action=move needs folder; action=categorize needs category; mark_read needs neither.",
@@ -608,7 +612,7 @@ DISPATCH.update(ot.DISPATCH)
 DISPATCH.update({
     "remember": remember, "recall": recall, "forget": forget,
     "set_project": set_project, "ask_documents": ask_documents,
-    "daily_briefing": daily_briefing,
+    "daily_briefing": daily_briefing, "inbox_triage": inbox_triage,
     "add_email_trigger": add_email_trigger, "list_email_triggers": list_email_triggers,
     "remove_email_trigger": remove_email_trigger, "run_email_triggers": run_email_triggers,
     "ocr_image": ocr_image,

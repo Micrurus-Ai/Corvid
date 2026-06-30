@@ -1,9 +1,11 @@
-"""Daily briefing: today's calendar, unread email, and open tasks, gathered from Outlook and
-formatted into a short summary the user can read or have spoken."""
+"""Daily briefing + inbox triage: read Outlook (calendar, unread, tasks) and summarize / prioritize."""
+import os
 import json
 
+from openai import OpenAI
+
 from axon.util import _result
-from axon.config import IS_WINDOWS
+from axon.config import IS_WINDOWS, MODEL
 from axon.outlook._base import _run_outlook_ps
 
 _BRIEFING_PS = r'''
@@ -72,3 +74,56 @@ def daily_briefing(args):
             due = f"  (due {t['due']})" if t.get("due") else ""
             lines.append(f"  - {t.get('subject', '')}{due}")
     return _result("\n".join(lines))
+
+
+_TRIAGE_PS = r'''
+$ErrorActionPreference = "SilentlyContinue"
+try {
+    $ol = New-Object -ComObject Outlook.Application
+    $unread = $ol.GetNamespace("MAPI").GetDefaultFolder(6).Items.Restrict("[UnRead]=true")
+    $arr = @()
+    foreach ($m in $unread) {
+        if ($m.Class -ne 43) { continue }
+        $b = [string]$m.Body
+        if ($b.Length -gt 400) { $b = $b.Substring(0, 400) }
+        $b = $b -replace "[\r\n]+", " "
+        $arr += [ordered]@{ from = [string]$m.SenderName; subject = [string]$m.Subject; snippet = $b }
+        if ($arr.Count -ge 30) { break }
+    }
+    $arr | ConvertTo-Json -Depth 4 -Compress
+} catch { Write-Output ("OL_ERROR: " + $_.Exception.Message) }
+'''
+
+
+def inbox_triage(args):
+    """Triage the unread inbox: order by importance and give each a priority, a one-line summary,
+    and a suggested action. Use for 'what needs my attention / triage my inbox'."""
+    if not IS_WINDOWS:
+        return _result("Inbox triage needs the Windows app with Outlook.", True)
+    out = _run_outlook_ps(_TRIAGE_PS, {}, show=False)
+    if not out or out.startswith("OL_ERROR"):
+        return _result("Couldn't read the inbox. " + (out or ""), True)
+    try:
+        data = json.loads(out)
+    except Exception:
+        data = []
+    if isinstance(data, dict):
+        data = [data]
+    if not data:
+        return _result("No unread emails — inbox zero!")
+    if not os.getenv("OPENAI_API_KEY"):
+        return _result("Unread:\n" + "\n".join(f"- {m.get('from', '')}: {m.get('subject', '')}" for m in data))
+    items = "\n".join(
+        f"{i + 1}. From: {m.get('from', '')} | Subject: {m.get('subject', '')} | {m.get('snippet', '')}"
+        for i, m in enumerate(data))
+    prompt = (
+        "Here are my unread emails. Triage them: order them most-important/urgent first, and for each give "
+        "a priority (High/Medium/Low), a one-line summary, and a short suggested action. Be concise.\n\n"
+        + items + "\n\nReturn a clean numbered list, most important first.")
+    try:
+        client = OpenAI()
+        r = client.chat.completions.create(
+            model=MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.2)
+        return _result((r.choices[0].message.content or "").strip() or "(no triage produced)")
+    except Exception as e:
+        return _result(f"Triage failed: {e}", True)
