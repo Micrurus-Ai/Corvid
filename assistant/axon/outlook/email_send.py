@@ -3,7 +3,7 @@ import os
 import subprocess
 
 from axon.config import IS_WINDOWS
-from axon.util import _result
+from axon.util import _result, NO_WINDOW
 from axon.approval import _ask_approval
 from axon.screen import _move_window_to_dot
 from axon.outlook._base import _run_outlook_ps, _OL_WIN_CLASS
@@ -159,7 +159,7 @@ def _send_email(args):
     try:
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", _SEND_EMAIL_PS],
-            capture_output=True, text=True, env=env, timeout=150,
+            capture_output=True, text=True, env=env, timeout=150, creationflags=NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return _result("Drafting timed out (Outlook may have shown a security prompt).", True)

@@ -8,7 +8,7 @@ import subprocess
 
 from axon import config
 from axon.config import IS_WINDOWS, _OCU, TOOL_TEXT_LIMIT
-from axon.util import _result
+from axon.util import _result, NO_WINDOW
 from axon.screen import _move_window_to_dot, _dot_monitor_env
 from axon.outlook import _run_outlook_ps
 
@@ -34,7 +34,7 @@ class MCPClient:
         cmd = (["cmd", "/c"] + inner) if IS_WINDOWS else inner
         self.proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, bufsize=1,
+            stderr=subprocess.DEVNULL, text=True, bufsize=1, creationflags=NO_WINDOW,
         )
         self._id = 0
         self._handshake()
@@ -241,7 +241,7 @@ def _close_app(client, args):
         if IS_WINDOWS:
             image = app if app.lower().endswith(".exe") else app + ".exe"
             proc = subprocess.run(["cmd", "/c", "taskkill", "/F", "/IM", image],
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, creationflags=NO_WINDOW)
         else:
             proc = subprocess.run(["pkill", "-9", "-f", app], capture_output=True, text=True)
         out = ((proc.stdout or "") + (proc.stderr or "")).strip()

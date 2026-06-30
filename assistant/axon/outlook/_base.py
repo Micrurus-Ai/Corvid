@@ -5,6 +5,7 @@ import subprocess
 
 from axon.config import IS_WINDOWS
 from axon.screen import _dot_monitor_env
+from axon.util import NO_WINDOW
 
 
 _OL_WIN_CLASS = r'''
@@ -85,7 +86,7 @@ def _run_outlook_ps(ps, extra_env, show=True):
     try:
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-            capture_output=True, text=True, env=env, timeout=90,
+            capture_output=True, text=True, env=env, timeout=90, creationflags=NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return "OL_ERROR: Outlook operation timed out."

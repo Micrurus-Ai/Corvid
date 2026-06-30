@@ -8,7 +8,7 @@ import subprocess
 from openai import OpenAI
 
 from axon.config import IS_WINDOWS, MODEL
-from axon.util import _result
+from axon.util import _result, NO_WINDOW
 from axon.outlook import _run_outlook_ps
 
 _INBOX_WATCH_PS = r'''
@@ -66,6 +66,7 @@ def inbox_watcher_popen():
         return subprocess.Popen(
             ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", _INBOX_WATCH_PS],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env,
+            creationflags=NO_WINDOW,
         )
     except Exception:
         return None

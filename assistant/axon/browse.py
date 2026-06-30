@@ -8,7 +8,7 @@ import urllib.request
 
 from axon import config
 from axon.config import BROWSE_MODEL, BROWSE_FALLBACK_MODEL, BROWSE_MAX_STEPS, DOWNLOADS_DIR
-from axon.util import _result
+from axon.util import _result, NO_WINDOW
 from axon.screen import _dot_monitor_env
 from axon.mcp import _extract
 from axon.prompts import BROWSE_STRATEGY
@@ -61,7 +61,7 @@ def _ensure_debug_chrome(port=CDP_PORT, profile=CHROME_DEBUG_PROFILE):
             x, y = m["L"] + (mw - w) // 2, m["T"] + (mh - h) // 2
             flags += [f"--window-position={x},{y}", f"--window-size={w},{h}"]
         flags.append("about:blank")
-        subprocess.Popen(flags)
+        subprocess.Popen(flags, creationflags=NO_WINDOW)
     except Exception:
         return None
     for _ in range(40):

@@ -5,7 +5,7 @@ import json
 import tempfile
 import subprocess
 
-from axon.util import _result
+from axon.util import _result, NO_WINDOW
 
 
 def _dot_mon_env():
@@ -44,7 +44,7 @@ def _run_ps(script, env=None, timeout=240):
     try:
         p = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", f.name],
-            capture_output=True, text=True, env=e, timeout=timeout,
+            capture_output=True, text=True, env=e, timeout=timeout, creationflags=NO_WINDOW,
         )
         out = (p.stdout or "").strip()
         err = (p.stderr or "").strip()
