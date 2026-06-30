@@ -1,7 +1,28 @@
 """The composer panel: input box, mode/approval/camera controls, attachment bar, and log."""
 import os
+import re
+import html as _htmllib
 
 from PySide6 import QtCore, QtGui, QtWidgets
+
+
+def _md_to_html(text):
+    """Render a line/block of lightweight markdown as HTML for the answer log:
+    **bold**, # headers, - bullets, `code`. Keeps everything else as plain text."""
+    out = []
+    for raw in (text or "").split("\n"):
+        s = _htmllib.escape(raw)
+        head = re.match(r"\s*#{1,6}\s+(.*)", s)
+        if head:
+            s = "<b>" + head.group(1).strip() + "</b>"
+        else:
+            bullet = re.match(r"(\s*)[-*]\s+(.*)", s)
+            if bullet:
+                s = bullet.group(1) + "&#8226; " + bullet.group(2)
+        s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+        s = re.sub(r"`([^`]+?)`", r"<code>\1</code>", s)
+        out.append(s)
+    return "<br>".join(out)
 from axon.ui.theme import (ACCENT, ACCENT_2, PANEL_BG, PANEL_BG_2, SURFACE, BORDER, TEXT,
                             MUTED, FONT_FAMILY, FONT_CSS, HEADER_ICON_SIZE, CONTROL_ICON_SIZE)
 from axon.ui.widgets import (IconButton, ArrowButton, ActivityButton, CloseButton,
@@ -169,10 +190,10 @@ class Composer(QtWidgets.QWidget):
         self.voice_bar.hide()
         layout.insertWidget(2, self.voice_bar)
 
-        self.log = QtWidgets.QPlainTextEdit()
+        self.log = QtWidgets.QTextEdit()
         self.log.setReadOnly(True)
         self.log.setStyleSheet(
-            f"QPlainTextEdit{{background:{SURFACE_2};color:#c8cad5;border:1px solid #292b35;"
+            f"QTextEdit{{background:{SURFACE_2};color:#c8cad5;border:1px solid #292b35;"
             f"border-radius:12px;padding:10px 12px;{FONT_CSS}font-size:12px;line-height:1.35;}}"
         )
         self.log.hide()
@@ -493,7 +514,7 @@ class Composer(QtWidgets.QWidget):
         return super().eventFilter(obj, event)
 
     def append_log(self, line):
-        self.log.appendPlainText(line)
+        self.log.append(_md_to_html(line))
         self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
 
     def task_finished(self):

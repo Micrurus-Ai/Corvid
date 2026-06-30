@@ -318,9 +318,9 @@ namespace Axon.OutlookAddin
                 "The user's folders (name, with full path for nested ones):\n" + js.Serialize(folders) + "\n\n" +
                 "Decide based on what the email is ABOUT and WHO it is from. Pick the folder whose name/path " +
                 "most closely matches that topic; the sender's company/domain is a strong hint. List the " +
-                "best-fitting folders first (up to 3), but ONLY include a folder that is a genuinely good fit " +
+                "best-fitting folders first (up to 5), but ONLY include a folder that is a genuinely good fit " +
                 "(do not pad the list). If none clearly fit, leave matches empty and propose a short new folder.\n" +
-                "Reply with ONLY JSON: {\"matches\": [up to 3 folder names copied EXACTLY from the list, best " +
+                "Reply with ONLY JSON: {\"matches\": [up to 5 folder names copied EXACTLY from the list, best " +
                 "first], \"new_folder\": \"a short (1-3 word) new folder name if nothing fits, else an empty string\"}";
             string text = ModelComplete(prompt, 0);
             if (string.IsNullOrEmpty(text)) return false;
@@ -352,7 +352,7 @@ namespace Axon.OutlookAddin
                 if (lower.ContainsKey(nfl)) { if (!matches.Contains(lower[nfl])) matches.Add(lower[nfl]); }
                 else result.newFolder = nf;
             }
-            if (matches.Count > 3) matches = matches.GetRange(0, 3);
+            if (matches.Count > 5) matches = matches.GetRange(0, 5);
             result.matches = matches.ToArray();
         }
 
@@ -1019,7 +1019,7 @@ namespace Axon.OutlookAddin
         {
             _all = folders ?? new string[0];
             Text = "Axon intelligence — Move email";
-            ClientSize = new System.Drawing.Size(500, 588);
+            ClientSize = new System.Drawing.Size(500, 648);
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
@@ -1030,14 +1030,14 @@ namespace Axon.OutlookAddin
             Controls.Add(Ui.Title("Move this email to a folder", 22, 18, W - 44));
             Controls.Add(Ui.Sub(subject ?? "(no subject)", 22, 46, W - 44));
 
-            _suggPanel = new Panel { Left = 20, Top = 74, Width = W - 40, Height = 116 };
+            _suggPanel = new Panel { Left = 20, Top = 74, Width = W - 40, Height = 176 };
             _suggPanel.Controls.Add(Ui.Hint("Finding best matches…", 2, 6, W - 60, 30));
             Controls.Add(_suggPanel);
 
-            Controls.Add(Ui.Caption("OR CREATE A NEW FOLDER", 22, 196, 300));
-            _newFolderBox = new TextBox { Left = 22, Top = 214, Width = W - 44 - 8 - 148, BorderStyle = BorderStyle.FixedSingle };
+            Controls.Add(Ui.Caption("OR CREATE A NEW FOLDER", 22, 256, 300));
+            _newFolderBox = new TextBox { Left = 22, Top = 274, Width = W - 44 - 8 - 148, BorderStyle = BorderStyle.FixedSingle };
             Controls.Add(_newFolderBox);
-            var createBtn = Ui.Accent("Create && Move", W - 22 - 148, 212, 148, 28);
+            var createBtn = Ui.Accent("Create && Move", W - 22 - 148, 272, 148, 28);
             createBtn.Click += (o, e) =>
             {
                 string nm = _newFolderBox.Text.Trim();
@@ -1046,13 +1046,13 @@ namespace Axon.OutlookAddin
             };
             Controls.Add(createBtn);
 
-            Controls.Add(Ui.Caption("OR PICK AN EXISTING FOLDER", 22, 252, 320));
-            _search = new TextBox { Left = 22, Top = 270, Width = W - 44, BorderStyle = BorderStyle.FixedSingle };
+            Controls.Add(Ui.Caption("OR PICK AN EXISTING FOLDER", 22, 312, 320));
+            _search = new TextBox { Left = 22, Top = 330, Width = W - 44, BorderStyle = BorderStyle.FixedSingle };
             _search.TextChanged += (o, e) => Filter();
             Controls.Add(_search);
             _list = new ListBox
             {
-                Left = 22, Top = 300, Width = W - 44, Height = H - 300 - 66,
+                Left = 22, Top = 360, Width = W - 44, Height = H - 360 - 66,
                 BorderStyle = BorderStyle.FixedSingle, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 46, IntegralHeight = false
             };
             _list.DrawItem += (o, e) => Ui.DrawFolderItem(_list, e);

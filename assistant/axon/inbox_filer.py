@@ -116,7 +116,7 @@ def suggest_folders(eid):
             f"From: {info.get('sender')} <{info.get('senderEmail')}>\n"
             f"Body (truncated):\n{info.get('body')}\n\n"
             f"The user's existing Inbox subfolders: {folders}\n\n"
-            "Choose the 3 folders from that list that best fit this email, best first. "
+            "Choose the 5 folders from that list that best fit this email, best first. "
             "Reply with ONLY a JSON array of folder names taken EXACTLY from the list — no new names."
         )
         resp = client.chat.completions.create(
@@ -124,14 +124,14 @@ def suggest_folders(eid):
         txt = resp.choices[0].message.content or ""
         m = re.search(r"\[.*\]", txt, re.S)
         sug = json.loads(m.group(0)) if m else []
-        result["suggestions"] = [s for s in sug if s in folders][:3]
+        result["suggestions"] = [s for s in sug if s in folders][:5]
     except Exception:
         pass
     return result
 
 
 def rank_folders(subject, sender, body, folders):
-    """Return up to 3 of the GIVEN folder names that best fit the email (AI ranking only, no COM).
+    """Return up to 5 of the GIVEN folder names that best fit the email (AI ranking only, no COM).
     Used by the Outlook add-in's Move button, which enumerates folders itself and just needs ranking."""
     folders = [f for f in (folders or []) if f]
     if not folders or not os.getenv("OPENAI_API_KEY"):
@@ -141,7 +141,7 @@ def rank_folders(subject, sender, body, folders):
         prompt = (
             f"Email subject: {subject}\nFrom: {sender}\nBody (truncated):\n{(body or '')[:1500]}\n\n"
             f"The user's folders: {folders}\n\n"
-            "Choose the 3 folders from that list that best fit this email, best first. "
+            "Choose the 5 folders from that list that best fit this email, best first. "
             "Reply with ONLY a JSON array of folder names taken EXACTLY from the list — no new names."
         )
         resp = client.chat.completions.create(
@@ -150,7 +150,7 @@ def rank_folders(subject, sender, body, folders):
         txt = resp.choices[0].message.content or ""
         m = re.search(r"\[.*\]", txt, re.S)
         sug = json.loads(m.group(0)) if m else []
-        return [s for s in sug if s in folders][:3]
+        return [s for s in sug if s in folders][:5]
     except Exception:
         return []
 
@@ -164,7 +164,7 @@ def _folder_name_from_subject(subject):
 
 
 def suggest_filing(subject, sender, body, folders):
-    """For the Outlook add-in: return {'matches': [up to 3 fitting existing folders, best first],
+    """For the Outlook add-in: return {'matches': [up to 5 fitting existing folders, best first],
     'new_folder': 'Name'} — new_folder is a short name to CREATE when none of the existing folders
     fit well (otherwise empty, so the UI can pre-fill the create box only when it's needed)."""
     folders = [f for f in (folders or []) if f]
@@ -177,7 +177,7 @@ def suggest_filing(subject, sender, body, folders):
             f"Email subject: {subject}\nFrom: {sender}\nBody (truncated):\n{(body or '')[:1500]}\n\n"
             f"The user's existing folders:\n{folders}\n\n"
             "Decide where to file this email. Reply with ONLY JSON:\n"
-            '{"matches": [up to 3 folder names taken EXACTLY from the list that fit well, best first], '
+            '{"matches": [up to 5 folder names taken EXACTLY from the list that fit well, best first], '
             '"new_folder": "if NONE of the existing folders is a good fit, a short clear name (1-3 words) '
             'for a NEW folder to create (this must NOT be empty in that case); if an existing folder fits, '
             'an empty string"}\n'
@@ -196,13 +196,13 @@ def suggest_filing(subject, sender, body, folders):
                 f = by_lower.get(str(s).strip().lower())
                 if f and f not in seen:
                     seen.append(f)
-            result["matches"] = seen[:3]
+            result["matches"] = seen[:5]
             nf = (d.get("new_folder") or "").strip()
             if nf:
                 existing = by_lower.get(nf.lower())
                 if existing:  # the "new" name is really an existing folder -> use it as a match
                     if existing not in result["matches"]:
-                        result["matches"] = (result["matches"] + [existing])[:3]
+                        result["matches"] = (result["matches"] + [existing])[:5]
                 else:
                     result["new_folder"] = nf
             # Nothing fit and no name proposed: always give the create box a sensible default.
