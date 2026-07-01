@@ -12,7 +12,8 @@ from axon.util import _result
 from axon.config import MODEL
 from axon.settings import load_settings, save_settings
 
-_EXT = {".txt", ".md", ".csv", ".log", ".docx", ".pdf", ".pptx", ".xlsx"}
+_EXT = {".txt", ".md", ".csv", ".log", ".docx", ".pdf", ".pptx", ".xlsx",
+        ".htm", ".html", ".json"}
 
 
 def set_project(args):
@@ -29,9 +30,14 @@ def set_project(args):
 def _read_text(path):
     ext = os.path.splitext(path)[1].lower()
     try:
-        if ext in (".txt", ".md", ".csv", ".log"):
+        if ext in (".txt", ".md", ".csv", ".log", ".json"):
             with open(path, encoding="utf-8", errors="ignore") as f:
                 return f.read()
+        if ext in (".htm", ".html"):
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                raw = f.read()
+            raw = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", raw)  # drop scripts/styles
+            return re.sub(r"<[^>]+>", " ", raw)                            # strip remaining tags
         if ext == ".docx":
             from docx import Document
             return "\n".join(p.text for p in Document(path).paragraphs)
@@ -113,5 +119,8 @@ def ask_documents(args):
         ans = resp.choices[0].message.content or ""
     except Exception as e:
         return _result(f"Q&A failed: {e}", True)
-    srcs = sorted(set(os.path.basename(p) for p, _ in top))
-    return _result(ans + "\n\nSources scanned: " + ", ".join(srcs))
+    scanned_srcs = sorted(set(os.path.basename(p) for p, _ in top))
+    cited = sorted(set(re.findall(r"\[([^\[\]]+\.[A-Za-z0-9]{1,5})\]", ans)))
+    footer = "\n\nSources cited: " + ", ".join(cited) if cited else \
+             "\n\nSources scanned: " + ", ".join(scanned_srcs)
+    return _result(ans + footer)

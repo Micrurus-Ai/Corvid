@@ -556,11 +556,26 @@ namespace Axon.OutlookAddin
             string langLine = string.IsNullOrEmpty(lang)
                 ? "Write the reply in the SAME language as the email."
                 : "Write the ENTIRE reply (greeting, message, and sign-off) in " + lang + ", regardless of the email's language.";
+            string tone = MyToneGuide();
+            string toneLine = string.IsNullOrEmpty(tone) ? "" : " Match the user's personal writing style:\n" + tone + "\n";
             return how + " Begin with an appropriate greeting addressed to the sender by first name, and end " +
                    "with a courteous sign-off" + (string.IsNullOrWhiteSpace(me) ? "" : " from " + me) + ". " +
-                   langLine + " Use a natural tone. Output ONLY the reply text itself (greeting, message, " +
-                   "sign-off) — no subject line and no quoted original.\n\n" +
+                   langLine + toneLine + " Use a natural tone. Output ONLY the reply text itself (greeting, " +
+                   "message, sign-off) — no subject line and no quoted original.\n\n" +
                    "Sender: " + sender + "\nSubject: " + subject + "\n\n" + body;
+        }
+
+        // The user's learned writing style (saved by the dot's "learn my tone" to %APPDATA%\AxonOutlook\tone.txt).
+        private static string MyToneGuide()
+        {
+            try
+            {
+                string p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                                        "AxonOutlook", "tone.txt");
+                if (File.Exists(p)) { string s = File.ReadAllText(p).Trim(); if (s.Length > 0) return s; }
+            }
+            catch { }
+            return "";
         }
 
         public void OnSchedule(object control)

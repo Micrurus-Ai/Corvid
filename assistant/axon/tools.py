@@ -12,10 +12,12 @@ from axon.outlook import (
     _outlook_list_emails, _outlook_move_emails, _outlook_delete_emails, _outlook_forward_email,
     _outlook_save_email, _get_open_email, _outlook_reply_email, _outlook_mark_read,
     _outlook_categorize, _create_outlook_rule, _create_calendar_event, _set_outlook_signature,
+    learn_my_tone,
 )
 from axon.memory import remember, recall, forget
 from axon.knowledge import set_project, ask_documents
 from axon.briefing import daily_briefing, inbox_triage
+from axon.meeting import meeting_notes
 from axon.triggers import add_email_trigger, list_email_triggers, remove_email_trigger, run_email_triggers
 from axon.vision import ocr_image
 
@@ -559,12 +561,27 @@ TOOLS += [
         "Triage the unread inbox: order emails by importance, each with a priority, one-line summary, "
         "and suggested action. Use for 'what needs my attention / triage my inbox'.",
         {}, []),
+    _fn("learn_my_tone",
+        "Analyse the user's recent Sent emails to learn their writing style (greeting, sign-off, "
+        "formality, length, per-language NL/FR/EN notes) and save it, so future replies and drafts "
+        "sound like them. Use for 'learn my tone / write like me / match my style'.",
+        {}, []),
+    _fn("meeting_notes",
+        "Turn a meeting into notes: summary, decisions, action items, and a follow-up email draft. "
+        "Accepts a recording file (audio=path to .mp3/.m4a/.mp4/.wav), a transcript file, or "
+        "transcript text. Use for 'summarize this meeting / take minutes / meeting notes'.",
+        {"audio": {"type": "string", "description": "Path to an audio/video recording"},
+         "transcript": {"type": "string", "description": "Transcript text, or path to a .txt transcript"},
+         "title": {"type": "string", "description": "Meeting title (optional)"}},
+        []),
     _fn("add_email_trigger",
         "Add an automation rule: when an unread inbox email matches (from and/or subject_contains), "
-        "do an action. action=move needs folder; action=categorize needs category; mark_read needs neither.",
+        "do an action. action=move needs folder; action=categorize needs category; mark_read and "
+        "draft_reply need neither (draft_reply writes a reply in your tone and leaves it open to approve "
+        "— never auto-sends).",
         {"from": {"type": "string", "description": "sender name/email contains"},
          "subject_contains": {"type": "string"},
-         "action": {"type": "string", "enum": ["move", "categorize", "mark_read"]},
+         "action": {"type": "string", "enum": ["move", "categorize", "mark_read", "draft_reply"]},
          "folder": {"type": "string"}, "category": {"type": "string"}},
         ["action"]),
     _fn("list_email_triggers", "List the configured email triggers (with their indexes).", {}, []),
@@ -613,6 +630,7 @@ DISPATCH.update({
     "remember": remember, "recall": recall, "forget": forget,
     "set_project": set_project, "ask_documents": ask_documents,
     "daily_briefing": daily_briefing, "inbox_triage": inbox_triage,
+    "learn_my_tone": learn_my_tone, "meeting_notes": meeting_notes,
     "add_email_trigger": add_email_trigger, "list_email_triggers": list_email_triggers,
     "remove_email_trigger": remove_email_trigger, "run_email_triggers": run_email_triggers,
     "ocr_image": ocr_image,

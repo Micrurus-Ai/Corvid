@@ -38,9 +38,11 @@ class Composer(QtWidgets.QWidget):
     QUICK_ACTIONS = [
         ("Brief me on my day", "Give me my daily briefing."),
         ("What needs my attention", "Triage my unread inbox — what needs my attention?"),
+        ("Learn my tone", "Learn my writing tone from my Sent items."),
         ("Make a branded deck", "Create a branded PowerPoint deck about "),
         ("Research a website + email report", "Research this website and email me a one-page report: "),
         ("Ask my documents", "Based on my project documents, "),
+        ("Meeting notes", "Take meeting notes from this recording: "),
         ("Summarize a PDF", "Summarize this PDF: "),
     ]
     guide_requested = QtCore.Signal(str)
@@ -190,6 +192,16 @@ class Composer(QtWidgets.QWidget):
         self.voice_bar.hide()
         layout.insertWidget(2, self.voice_bar)
 
+        self.plan = QtWidgets.QLabel("")
+        self.plan.setWordWrap(True)
+        self.plan.setTextFormat(QtCore.Qt.RichText)
+        self.plan.setStyleSheet(
+            f"QLabel{{background:{SURFACE_2};color:#c8cad5;border:1px solid #292b35;"
+            f"border-radius:12px;padding:10px 12px;{FONT_CSS}font-size:12px;}}"
+        )
+        self.plan.hide()
+        layout.addWidget(self.plan, 0)
+
         self.log = QtWidgets.QTextEdit()
         self.log.setReadOnly(True)
         self.log.setStyleSheet(
@@ -231,6 +243,7 @@ class Composer(QtWidgets.QWidget):
             if not self._activity_visible:
                 self.activity_btn.setChecked(True)
             self.log.clear()
+            self.set_plan([])
             self.send_btn.set_running(True)
             self.guide_requested.emit(text)
         elif mode == "ask":
@@ -238,7 +251,9 @@ class Composer(QtWidgets.QWidget):
                 return
             if not self._activity_visible:
                 self.activity_btn.setChecked(True)
-            self.log.clear()
+            # Build a visible conversation thread (keep prior turns instead of wiping the log).
+            self.set_plan([])
+            self.append_user(text or "[screenshot]")
             self.send_btn.set_running(True)
             self.ask_requested.emit(text)
         else:
@@ -247,6 +262,7 @@ class Composer(QtWidgets.QWidget):
             if not self._activity_visible:
                 self.activity_btn.setChecked(True)
             self.log.clear()
+            self.set_plan([])
             self.send_btn.set_running(True)
             self.submitted.emit(text)
 
@@ -336,6 +352,8 @@ class Composer(QtWidgets.QWidget):
             h += 40  # voice-clip bar
         if self._activity_visible:
             h += 130
+        if getattr(self, "plan", None) is not None and self.plan.isVisible():
+            h += min(180, max(70, self.plan.sizeHint().height() + 16))
         self.setMinimumHeight(h)
 
     def _set_activity_visible(self, visible):
@@ -516,6 +534,44 @@ class Composer(QtWidgets.QWidget):
     def append_log(self, line):
         self.log.append(_md_to_html(line))
         self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
+
+    def append_user(self, text):
+        """Add the user's message to the conversation thread (right-side, accented label)."""
+        safe = _htmllib.escape(text)
+        self.log.append(
+            "<div style='color:#7f8190;font-size:10px;letter-spacing:1px;margin-top:8px;'>YOU</div>"
+            f"<div style='color:#e6e7ee;'>{safe}</div>")
+        self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
+
+    def append_answer_label(self):
+        self.log.append(
+            "<div style='color:#7f8190;font-size:10px;letter-spacing:1px;margin-top:8px;'>AXON</div>")
+
+    def set_plan(self, todos):
+        """Render the agent's live checklist as a persistent panel: done items ticked + struck,
+        the current step highlighted, the rest pending. Pass [] to hide it."""
+        todos = todos or []
+        if not todos:
+            if self.plan.isVisible():
+                self.plan.hide()
+                self._refresh_min_height()
+            return
+        cur = next((i for i, t in enumerate(todos) if not t.get("done")), None)
+        n_done = sum(1 for t in todos if t.get("done"))
+        rows = ["<div style='color:#8a8c99;font-size:10px;letter-spacing:1px;margin-bottom:4px;'>"
+                f"PLAN — {n_done}/{len(todos)} DONE</div>"]
+        for i, t in enumerate(todos):
+            task = _htmllib.escape(str(t.get("task", "")))
+            if t.get("done"):
+                rows.append(f"<div style='color:#6f7280;'>&#10003; <s>{task}</s></div>")
+            elif i == cur:
+                rows.append(f"<div style='color:#e6e7ee;'><b>&#9654; {task}</b></div>")
+            else:
+                rows.append(f"<div style='color:#9a9cab;'>&#9675; {task}</div>")
+        self.plan.setText("".join(rows))
+        if not self.plan.isVisible():
+            self.plan.show()
+            self._refresh_min_height()
 
     def task_finished(self):
         self.send_btn.set_running(False)

@@ -24,6 +24,7 @@ class FloatingDot(QtWidgets.QWidget):
     DIAM = 44
     inbox_suggestions = QtCore.Signal(object)  # folder suggestions ready (from a worker thread)
     hotkey_email = QtCore.Signal(str, str, str)  # (eid, subject, sender) from the global hotkey
+    proactive_nudge = QtCore.Signal(object)      # an upcoming event to gently offer help with
     _HOTKEY_ID = 0xA17  # Ctrl+Alt+M -> file the email currently open/selected in Outlook
 
     def __init__(self):
@@ -78,6 +79,19 @@ class FloatingDot(QtWidgets.QWidget):
         _app = QtWidgets.QApplication.instance()
         if _app is not None:
             _app.aboutToQuit.connect(self._inbox_watcher.stop)
+
+        self._init_tray()   # system-tray icon: completion notifications + show/quit menu
+
+        # Proactive nudges: shortly before a meeting, offer to prep. Checked on a timer.
+        self._pending_suggestion = None
+        self._proactive_seen = set()
+        self.proactive_nudge.connect(self._on_proactive)
+        self._proactive_timer = QtCore.QTimer(self)
+        self._proactive_timer.setInterval(5 * 60 * 1000)   # every 5 minutes
+        self._proactive_timer.timeout.connect(self._proactive_check)
+        if config.IS_WINDOWS:
+            self._proactive_timer.start()
+            QtCore.QTimer.singleShot(60 * 1000, self._proactive_check)  # first check ~1 min after launch
 
         # Tell the backend which window is the dot, so opened apps land on the dot's monitor.
         try:
@@ -180,6 +194,94 @@ class FloatingDot(QtWidgets.QWidget):
                 self._toggle_composer()
             self._drag_offset = None
 
+    def _tray_icon(self):
+        pix = QtGui.QPixmap(32, 32)
+        pix.fill(QtCore.Qt.transparent)
+        p = QtGui.QPainter(pix)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        grad = QtGui.QLinearGradient(0, 0, 32, 32)
+        grad.setColorAt(0, QtGui.QColor(ACCENT))
+        grad.setColorAt(1, QtGui.QColor(ACCENT_2))
+        p.setBrush(QtGui.QBrush(grad))
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawEllipse(4, 4, 24, 24)
+        p.end()
+        return QtGui.QIcon(pix)
+
+    def _init_tray(self):
+        """System-tray presence: shows task-done notifications and a show/quit menu."""
+        self._tray = None
+        try:
+            if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+                return
+            self._tray = QtWidgets.QSystemTrayIcon(self._tray_icon(), self)
+            self._tray.setToolTip("Axon intelligence")
+            menu = QtWidgets.QMenu()
+            menu.addAction("Show Axon", self._summon)
+            menu.addAction("Quit", QtWidgets.QApplication.instance().quit)
+            self._tray.setContextMenu(menu)
+            self._tray.activated.connect(
+                lambda r: self._summon() if r == QtWidgets.QSystemTrayIcon.Trigger else None)
+            self._tray.messageClicked.connect(self._summon)
+            self._tray.show()
+        except Exception:
+            self._tray = None
+
+    def _summon(self):
+        """Bring up the composer (from the tray icon or a notification click)."""
+        if not self.composer.isVisible():
+            self._toggle_composer()
+        else:
+            self.composer.raise_()
+            self.composer.activateWindow()
+        if self._pending_suggestion:   # a proactive nudge was clicked — prefill it
+            try:
+                self.composer.input.setPlainText(self._pending_suggestion)
+                self.composer.input.setFocus()
+            except Exception:
+                pass
+            self._pending_suggestion = None
+
+    def _proactive_check(self):
+        """Background-poll Outlook for an imminent meeting; emit a nudge if there's a new one."""
+        def work():
+            try:
+                ev = agent.upcoming_event(10)
+            except Exception:
+                ev = None
+            if ev and ev.get("id") and ev["id"] not in self._proactive_seen:
+                self._proactive_seen.add(ev["id"])
+                self.proactive_nudge.emit(ev)
+        threading.Thread(target=work, daemon=True).start()
+
+    @QtCore.Slot(object)
+    def _on_proactive(self, ev):
+        subj = ev.get("subject") or "a meeting"
+        mins = ev.get("minutes", 0)
+        self._pending_suggestion = f"Prep me for my meeting \"{subj}\": pull recent emails and context about it."
+        when = "now" if mins <= 0 else f"in {mins} min"
+        if self._tray:
+            try:
+                self._tray.showMessage(
+                    "Upcoming meeting", f"“{subj}” {when} — click to have Axon prep you.",
+                    self._tray_icon(), 9000)
+            except Exception:
+                pass
+
+    def _notify_done(self, result):
+        """Toast the result if the user isn't looking at the panel, so they can walk away while it works."""
+        try:
+            if not self._tray:
+                return
+            if self.composer.isVisible() and self.composer.isActiveWindow():
+                return
+            summary = " ".join(str(result).split())
+            if len(summary) > 200:
+                summary = summary[:197] + "..."
+            self._tray.showMessage("Axon — task done", summary or "Done.", self._tray_icon(), 7000)
+        except Exception:
+            pass
+
     def _toggle_composer(self):
         dot = self.frameGeometry()
         cw, ch = self.composer.width(), self.composer.height()
@@ -242,6 +344,7 @@ class FloatingDot(QtWidgets.QWidget):
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.status.connect(self.composer.append_log)
+        self._worker.plan.connect(self.composer.set_plan)
         self._worker.approval_requested.connect(self._on_approval_requested)
         self._worker.finished.connect(self._on_finished)
         self._thread.start()
@@ -339,10 +442,15 @@ class FloatingDot(QtWidgets.QWidget):
     @QtCore.Slot(str)
     def _on_finished(self, result):
         self._approval_popup.hide()
-        self.composer.append_log("")
+        w = self._worker
+        if w and getattr(w, "mode", "") == "chat":
+            self.composer.append_answer_label()   # label the reply in the conversation thread
+        else:
+            self.composer.append_log("")
         self.composer.append_log(result)
         self.composer.task_finished()
-        w = self._worker
+        if not (w and getattr(w, "mode", "") == "chat"):
+            self._notify_done(result)   # background completion toast for agent tasks
         if w and getattr(w, "mode", "") == "chat" and not str(result).startswith("Error:"):
             # Remember this Maia exchange so follow-up questions keep context (cap to recent turns).
             self._chat_history.append({"role": "user", "content": (w.question or "").strip() or "[screenshot]"})

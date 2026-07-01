@@ -32,6 +32,7 @@ from axon.inbox_filer import (  # noqa: F401
     inbox_watcher_popen, suggest_folders, rank_folders, suggest_filing, move_email_to_folder,
     active_email,
 )
+from axon.briefing import upcoming_event  # noqa: F401  (proactive meeting nudge)
 
 if __name__ == "__main__":
     try:

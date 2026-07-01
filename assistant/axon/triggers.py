@@ -1,13 +1,20 @@
 """Email triggers: "when an email matching X arrives, do Y." Rules persist in settings and are
 applied on demand by run_email_triggers (schedule that to run periodically for hands-off automation).
-Actions are deliberately safe (move / categorize / mark read) — no auto-replies."""
+Actions are deliberately safe (move / categorize / mark read / draft a reply) — a reply is only
+ DRAFTED and left open for the user to approve; it is never sent automatically."""
+import os
 import json
 
+from openai import OpenAI
+
 from axon.util import _result
-from axon.config import IS_WINDOWS
+from axon.config import IS_WINDOWS, MODEL
 from axon.settings import load_settings, save_settings
 from axon.outlook._base import _run_outlook_ps
-from axon.outlook import _outlook_move_emails, _outlook_categorize, _outlook_mark_read
+from axon.outlook import _outlook_move_emails, _outlook_categorize, _outlook_mark_read, my_tone
+from axon.outlook.email_send import _OUTLOOK_REPLY_PS
+
+_MAX_DRAFTS_PER_RUN = 5   # don't flood the screen with reply windows in one pass
 
 _UNREAD_PS = r'''
 $ErrorActionPreference = "SilentlyContinue"
@@ -18,7 +25,9 @@ try {
     $arr = @()
     foreach ($m in $unread) {
         if ($m.Class -ne 43) { continue }
-        $arr += [ordered]@{ id = [string]$m.EntryID; from = [string]$m.SenderName; email = [string]$m.SenderEmailAddress; subject = [string]$m.Subject }
+        $b = [string]$m.Body
+        if ($b.Length -gt 1500) { $b = $b.Substring(0, 1500) }
+        $arr += [ordered]@{ id = [string]$m.EntryID; from = [string]$m.SenderName; email = [string]$m.SenderEmailAddress; subject = [string]$m.Subject; body = $b }
         if ($arr.Count -ge 100) { break }
     }
     $arr | ConvertTo-Json -Depth 4 -Compress
@@ -31,10 +40,11 @@ def _rules():
 
 
 def add_email_trigger(args):
-    """Add a rule: match by sender (from) and/or subject_contains; action = move/categorize/mark_read."""
+    """Add a rule: match by sender (from) and/or subject_contains; action =
+    move/categorize/mark_read/draft_reply."""
     action = (args.get("action") or "").lower()
-    if action not in ("move", "categorize", "mark_read"):
-        return _result("action must be move, categorize, or mark_read.", True)
+    if action not in ("move", "categorize", "mark_read", "draft_reply"):
+        return _result("action must be move, categorize, mark_read, or draft_reply.", True)
     rule = {"from": args.get("from") or "", "subject_contains": args.get("subject_contains") or "",
             "action": action, "folder": args.get("folder") or "", "category": args.get("category") or ""}
     if not rule["from"] and not rule["subject_contains"]:
@@ -77,6 +87,26 @@ def remove_email_trigger(args):
     return _result(f"Removed trigger [{i}] ({removed['action']}).")
 
 
+def _draft_reply_text(subject, sender, body):
+    """Draft a reply body in the user's learned tone (same language as the email). '' on failure."""
+    if not os.getenv("OPENAI_API_KEY"):
+        return ""
+    tone = my_tone()
+    toneline = ("\nMatch the user's personal writing style:\n" + tone) if tone else ""
+    prompt = (
+        "Draft a reply to this email. Begin with a greeting to the sender by first name and end with a "
+        "courteous sign-off. Reply in the SAME language as the email. Output ONLY the reply text "
+        "(no subject, no quoted original)." + toneline +
+        f"\n\nFrom: {sender}\nSubject: {subject}\n\n{body[:2000]}")
+    try:
+        client = OpenAI()
+        r = client.chat.completions.create(
+            model=MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.4)
+        return (r.choices[0].message.content or "").strip()
+    except Exception:
+        return ""
+
+
 def _match(rule, m):
     f = (rule.get("from") or "").lower()
     sc = (rule.get("subject_contains") or "").lower()
@@ -103,7 +133,7 @@ def run_email_triggers(args):
         data = []
     if isinstance(data, dict):
         data = [data]
-    actions, report = 0, []
+    actions, report, drafts = 0, [], 0
     for m in data:
         for rule in rules:
             if _match(rule, m):
@@ -114,6 +144,16 @@ def run_email_triggers(args):
                     _outlook_categorize({"ids": [eid], "category": rule["category"]})
                 elif act == "mark_read":
                     _outlook_mark_read({"ids": [eid]})
+                elif act == "draft_reply":
+                    if drafts >= _MAX_DRAFTS_PER_RUN:
+                        continue
+                    body = _draft_reply_text(m.get("subject", ""), m.get("from", ""), m.get("body", ""))
+                    if not body:
+                        report.append(f"draft_reply (couldn't draft): {m.get('subject', '')[:50]}")
+                        break
+                    _run_outlook_ps(_OUTLOOK_REPLY_PS,
+                                    {"OL_ID": eid, "OL_BODY": body, "OL_REPLYALL": ""}, show=True)
+                    drafts += 1
                 actions += 1
                 report.append(f"{act}: {m.get('subject', '')[:50]}")
                 break

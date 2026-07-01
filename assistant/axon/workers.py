@@ -12,6 +12,7 @@ import agent
 class AgentWorker(QtCore.QObject):
     status = QtCore.Signal(str)
     finished = QtCore.Signal(str)
+    plan = QtCore.Signal(list)               # live checklist: [{task, done}, ...]
     approval_requested = QtCore.Signal(str)  # describes the pending action; UI must call resolve_approval
 
     def __init__(self, question, approval_mode=False, image_path=None, mode="agent", chat_history=None):
@@ -67,6 +68,7 @@ class AgentWorker(QtCore.QObject):
                     should_cancel=self._should_cancel,
                     on_approval=self._on_approval,
                     image_path=self.image_path,
+                    on_plan=lambda t: self.plan.emit(t),
                 )
             self.finished.emit(result or "Done.")
         except Exception as e:

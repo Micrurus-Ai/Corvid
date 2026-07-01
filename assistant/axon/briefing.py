@@ -44,6 +44,41 @@ try {
 '''
 
 
+_NEXT_EVENT_PS = r'''
+$ErrorActionPreference = "SilentlyContinue"
+try {
+    $ol = New-Object -ComObject Outlook.Application
+    $ns = $ol.GetNamespace("MAPI")
+    $now = Get-Date
+    $cal = $ns.GetDefaultFolder(9).Items
+    $cal.IncludeRecurrences = $true
+    $cal.Sort("[Start]")
+    $f = "[Start] >= '" + $now.ToString("MM/dd/yyyy") + "' AND [Start] <= '" + $now.AddDays(1).ToString("MM/dd/yyyy") + "'"
+    foreach ($a in $cal.Restrict($f)) {
+        $mins = [int]([datetime]$a.Start - $now).TotalMinutes
+        if ($mins -ge 0 -and $mins -le [int]$env:AX_WIN) {
+            [ordered]@{ id = [string]$a.EntryID; subject = [string]$a.Subject; minutes = $mins; time = ([datetime]$a.Start).ToString("HH:mm") } | ConvertTo-Json -Compress
+            break
+        }
+    }
+} catch {}
+'''
+
+
+def upcoming_event(within_min=10):
+    """Return the next calendar event starting within `within_min` minutes, or None. Used by the
+    dot's proactive nudge — kept lightweight (no model call, Outlook not surfaced)."""
+    if not IS_WINDOWS:
+        return None
+    out = _run_outlook_ps(_NEXT_EVENT_PS, {"AX_WIN": str(int(within_min))}, show=False)
+    if not out or not out.lstrip().startswith("{"):
+        return None
+    try:
+        return json.loads(out)
+    except Exception:
+        return None
+
+
 def daily_briefing(args):
     """Summarize today: calendar events, unread email (count + top senders), and open tasks."""
     if not IS_WINDOWS:

@@ -13,3 +13,4 @@ from axon.outlook.folders import (
 )
 from axon.outlook.calendar import _create_calendar_event
 from axon.outlook.signature import _set_outlook_signature
+from axon.outlook.tone import learn_my_tone, my_tone

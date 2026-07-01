@@ -16,6 +16,17 @@ from axon.prompts import (
 from axon.tools import TOOLS, DISPATCH
 from axon import approval
 from axon import memory
+from axon.outlook import my_tone
+from axon.context import active_context_note
+
+
+def _tone_block():
+    """Inject the learned writing style so emails Axon drafts sound like the user."""
+    guide = my_tone()
+    if not guide:
+        return ""
+    return ("\n\nWHEN DRAFTING OR REPLYING TO EMAILS, write in the user's own voice. Their style:\n"
+            + guide + "\n")
 from axon.approval import _needs_approval, _describe_action
 from axon.util import _result
 from axon.mcp import _extract, MCPClient, _close_app
@@ -49,7 +60,13 @@ def chat(question, on_status=None, image_path=None, history=None):
             ]
         except Exception:
             content = question
-    messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT + memory.context_block()}]
+    _ctx = active_context_note(question)   # name the open file(s) if they said "this file"
+    if _ctx:
+        if isinstance(content, list):
+            content[0]["text"] = content[0].get("text", "") + _ctx
+        else:
+            content = (content or "") + _ctx
+    messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT + memory.context_block() + _tone_block()}]
     if history:
         messages.extend(history)            # prior turns, so follow-ups keep context
     messages.append({"role": "user", "content": content})
@@ -60,7 +77,7 @@ def chat(question, on_status=None, image_path=None, history=None):
         return f"Error: {e}"
 
 
-def run_task(question, on_status=None, should_cancel=None, on_approval=None, image_path=None):
+def run_task(question, on_status=None, should_cancel=None, on_approval=None, image_path=None, on_plan=None):
     """Run a natural-language task. Calls on_status(str) with progress; returns final summary.
     If on_approval is given, it is called as on_approval(description)->bool before any action that
     sends/changes data, and the action runs only if it returns True (approval mode).
@@ -103,8 +120,14 @@ def run_task(question, on_status=None, should_cancel=None, on_approval=None, ima
             ]
         except Exception:
             user_content = question
+    _ctx = active_context_note(question)   # name the open file(s) if they said "this file"
+    if _ctx:
+        if isinstance(user_content, list):
+            user_content[0]["text"] = user_content[0].get("text", "") + _ctx
+        else:
+            user_content = (user_content or "") + _ctx
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT + memory.context_block()},
+        {"role": "system", "content": SYSTEM_PROMPT + memory.context_block() + _tone_block()},
         {"role": "user", "content": user_content},
     ]
     status("Axon intelligence is thinking...")
@@ -161,12 +184,9 @@ def run_task(question, on_status=None, should_cancel=None, on_approval=None, ima
                         f"Do not retry it; continue with anything else they asked, or stop and report.", False)
                 elif name == "update_todos":
                     todos = args.get("todos") or []
-                    lines = []
-                    for t in todos:
-                        box = "[x]" if t.get("done") else "[ ]"
-                        lines.append(f"  {box} {t.get('task', '')}")
+                    if on_plan:
+                        on_plan(todos)   # render as a live checklist panel in the UI
                     ndone = sum(1 for t in todos if t.get("done"))
-                    status("Checklist (%d/%d done):\n%s" % (ndone, len(todos), "\n".join(lines)))
                     result = _result("Checklist updated: %d of %d steps done." % (ndone, len(todos)))
                 elif name == "close_app":
                     result = _close_app(mcp, args)  # needs the live MCP client
