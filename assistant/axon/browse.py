@@ -71,6 +71,28 @@ def _ensure_debug_chrome(port=CDP_PORT, profile=CHROME_DEBUG_PROFILE):
     return None
 
 
+def setup_browser(args=None):
+    """One-time onboarding: open Axon's own Chrome so the user can sign in to the accounts they want
+    Axon to use. The logins are saved in Axon's browser profile and reused for all future browsing."""
+    url = (args or {}).get("url") or "https://accounts.google.com/"
+    cdp = _ensure_debug_chrome()   # launch (or reuse) the automation Chrome on the dot's monitor
+    if not cdp:
+        return _result("Couldn't start Axon's browser — is Google Chrome installed?", True)
+    chrome = _find_chrome()
+    if chrome:
+        try:
+            # A second launch with the same profile forwards the URL to the running window and exits.
+            subprocess.Popen([chrome, f"--user-data-dir={CHROME_DEBUG_PROFILE}", url],
+                             creationflags=NO_WINDOW)
+        except Exception:
+            pass
+    return _result(
+        "Opened Axon's browser. Sign in to the accounts you want Axon to use — your Google account, "
+        "your intranet/portals, analytics, etc. (complete any 2-step verification). You only need to "
+        "do this ONCE: Axon saves these logins in its own browser profile and reuses them for every "
+        "future browsing task. Open more sites in the same window to add them, then you can close it.")
+
+
 def _browse(args):
     """Hand a web task to browser-use (its own Axon intelligence + CDP browser) and return the result."""
     task = (args.get("task") or "").strip()

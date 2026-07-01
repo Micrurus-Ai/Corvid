@@ -2,7 +2,7 @@
 DISPATCH map used by the agent loop. axon.office contributes its own schemas + dispatch."""
 from axon import office as ot
 
-from axon.browse import _browse, _research_website
+from axon.browse import _browse, _research_website, setup_browser
 from axon.screen import _take_screenshot
 from axon.files import _read_file
 from axon.messaging import _send_teams_message
@@ -561,6 +561,12 @@ TOOLS += [
         "Triage the unread inbox: order emails by importance, each with a priority, one-line summary, "
         "and suggested action. Use for 'what needs my attention / triage my inbox'.",
         {}, []),
+    _fn("setup_browser",
+        "Open Axon's own browser so the user can sign in to the accounts they want Axon to use "
+        "(Google, intranet, analytics). One-time — the logins are saved and reused for all future "
+        "browsing. Use for 'sign in to my browser / set up browsing / add my Chrome account'.",
+        {"url": {"type": "string", "description": "Optional first page to open (default Google sign-in)"}},
+        []),
     _fn("learn_my_tone",
         "Analyse the user's recent Sent emails to learn their writing style (greeting, sign-off, "
         "formality, length, per-language NL/FR/EN notes) and save it, so future replies and drafts "
@@ -624,6 +630,7 @@ DISPATCH = {
     "list_installed_apps": _list_installed_apps,
     "send_teams_message": _send_teams_message,
     "open_app": _open_app,
+    "setup_browser": setup_browser,
 }
 DISPATCH.update(ot.DISPATCH)
 DISPATCH.update({

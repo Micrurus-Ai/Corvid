@@ -152,6 +152,10 @@ class ProfileButton(IconButton):
         self.autofile_action = menu.addAction("Auto-file inbox emails")
         self.autofile_action.setCheckable(True)
         self.autofile_action.setToolTip("Suggest a folder when you open an unfiled Inbox email")
+        menu.addSeparator()
+        self.signin_action = menu.addAction("Sign in to my browser…")
+        self.signin_action.setToolTip("Open Axon's browser once to sign in to your accounts (Google, "
+                                      "intranet, analytics). Reused for all future browsing.")
         self.setMenu(menu)
 
     def paintEvent(self, _):

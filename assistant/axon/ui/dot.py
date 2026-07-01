@@ -25,6 +25,7 @@ class FloatingDot(QtWidgets.QWidget):
     inbox_suggestions = QtCore.Signal(object)  # folder suggestions ready (from a worker thread)
     hotkey_email = QtCore.Signal(str, str, str)  # (eid, subject, sender) from the global hotkey
     proactive_nudge = QtCore.Signal(object)      # an upcoming event to gently offer help with
+    browser_setup_msg = QtCore.Signal(str)       # result of the one-time browser sign-in
     _HOTKEY_ID = 0xA17  # Ctrl+Alt+M -> file the email currently open/selected in Outlook
 
     def __init__(self):
@@ -66,6 +67,8 @@ class FloatingDot(QtWidgets.QWidget):
         _act = self.composer.profile_btn.autofile_action
         _act.setChecked(self._settings.get("autofile", False))  # set before connecting, so it won't fire
         _act.toggled.connect(self._set_autofile)
+        self.composer.profile_btn.signin_action.triggered.connect(self._setup_browser)
+        self.browser_setup_msg.connect(self.composer.append_log)
         self._inbox_watcher = InboxWatcher()
         self._inbox_watcher.opened.connect(self._on_inbox_opened)
         self._folder_popup = FolderPickPopup()
@@ -241,6 +244,21 @@ class FloatingDot(QtWidgets.QWidget):
             except Exception:
                 pass
             self._pending_suggestion = None
+
+    def _setup_browser(self):
+        """One-time browser sign-in from the profile menu (runs off the UI thread)."""
+        if not self.composer._activity_visible:
+            self.composer.activity_btn.setChecked(True)
+        self.composer.append_log("Opening Axon's browser — sign in to the accounts you want Axon to use…")
+
+        def work():
+            try:
+                res = agent.setup_browser({})
+                text = res["content"][0]["text"]
+            except Exception as e:
+                text = f"Couldn't open the browser: {e}"
+            self.browser_setup_msg.emit(text)
+        threading.Thread(target=work, daemon=True).start()
 
     def _proactive_check(self):
         """Background-poll Outlook for an imminent meeting; emit a nudge if there's a new one."""

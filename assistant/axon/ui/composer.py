@@ -39,6 +39,7 @@ class Composer(QtWidgets.QWidget):
         ("Brief me on my day", "Give me my daily briefing."),
         ("What needs my attention", "Triage my unread inbox — what needs my attention?"),
         ("Learn my tone", "Learn my writing tone from my Sent items."),
+        ("Sign in to my browser", "Open Axon's browser so I can sign in to my accounts for browsing."),
         ("Make a branded deck", "Create a branded PowerPoint deck about "),
         ("Research a website + email report", "Research this website and email me a one-page report: "),
         ("Ask my documents", "Based on my project documents, "),

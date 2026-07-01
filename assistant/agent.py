@@ -33,6 +33,7 @@ from axon.inbox_filer import (  # noqa: F401
     active_email,
 )
 from axon.briefing import upcoming_event  # noqa: F401  (proactive meeting nudge)
+from axon.browse import setup_browser  # noqa: F401  (one-time browser sign-in from the UI)
 
 if __name__ == "__main__":
     try:
