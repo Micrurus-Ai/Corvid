@@ -27,6 +27,7 @@ class FloatingDot(QtWidgets.QWidget):
     proactive_nudge = QtCore.Signal(object)      # an upcoming event to gently offer help with
     browser_setup_msg = QtCore.Signal(str)       # result of the one-time browser sign-in
     followup_due = QtCore.Signal(object)         # a follow-up reminder (no reply yet) from the add-in
+    scheduled_due = QtCore.Signal(object)        # a 'Send Later' email whose time has arrived
     _HOTKEY_ID = 0xA17  # Ctrl+Alt+M -> file the email currently open/selected in Outlook
 
     def __init__(self):
@@ -94,8 +95,9 @@ class FloatingDot(QtWidgets.QWidget):
         self._proactive_timer = QtCore.QTimer(self)
         self._proactive_timer.setInterval(5 * 60 * 1000)   # every 5 minutes
         self._proactive_timer.timeout.connect(self._proactive_check)
-        # Follow-up reminders recorded by the Outlook add-in.
+        # Follow-up reminders + scheduled-send notices recorded by the add-in / dot.
         self.followup_due.connect(self._on_followup_due)
+        self.scheduled_due.connect(self._on_scheduled_due)
         self._followup_timer = QtCore.QTimer(self)
         self._followup_timer.setInterval(2 * 60 * 1000)    # every 2 minutes
         self._followup_timer.timeout.connect(self._followup_check)
@@ -295,14 +297,38 @@ class FloatingDot(QtWidgets.QWidget):
         threading.Thread(target=work, daemon=True).start()
 
     def _followup_check(self):
-        """Poll the add-in's follow-up file; remind (tray) about any now due with no reply yet."""
+        """Poll for due follow-up reminders and scheduled ('Send Later') sends; notify about each."""
         def work():
             try:
                 for it in (agent.due_followups() or []):
                     self.followup_due.emit(it)
             except Exception:
                 pass
+            try:
+                for it in (agent.due_scheduled() or []):
+                    self.scheduled_due.emit(it)
+            except Exception:
+                pass
         threading.Thread(target=work, daemon=True).start()
+
+    @QtCore.Slot(object)
+    def _on_scheduled_due(self, it):
+        to = (it.get("to") or "someone").split("<")[0].strip()
+        subject = it.get("subject") or "your email"
+        if it.get("kind") == "remind":
+            import datetime
+            mins = 10
+            try:
+                w = datetime.datetime.fromisoformat(it.get("when"))
+                mins = max(1, round((w - datetime.datetime.now()).total_seconds() / 60))
+            except Exception:
+                pass
+            self._show_toast("Scheduled email sends soon",
+                             f"Your email to {to} — \"{subject}\" sends in about {mins} min. "
+                             f"Open Outbox to change or cancel it.")
+        else:
+            self._show_toast("Scheduled email sent",
+                             f"Your email to {to} — \"{subject}\" has gone out.")
 
     def _show_toast(self, title, message, suggestion=None):
         """A real Windows toast (Action Center, DND-aware) PLUS an in-app slide-in alert as a

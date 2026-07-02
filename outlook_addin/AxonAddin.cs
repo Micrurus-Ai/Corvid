@@ -761,15 +761,18 @@ namespace Axon.OutlookAddin
                 dynamic item = insp.CurrentItem;
                 int cls = 0; try { cls = (int)item.Class; } catch { }
                 if (item == null || cls != 43) { Ui.Notify("Send Later works on an email you're composing.", "Axon intelligence"); return; }
-                DateTime when;
-                using (var p = new WhenPrompt("Send Later", "When should Axon send this email?"))
+                DateTime when; bool remind;
+                using (var p = new WhenPrompt("Send Later", "When should Axon send this email?", true))
                 {
                     if (p.ShowDialog() != DialogResult.OK) return;
-                    when = p.When;
+                    when = p.When; remind = p.Remind;
                 }
                 if (when <= DateTime.Now.AddMinutes(1)) { Ui.Notify("Pick a time in the future.", "Axon intelligence"); return; }
+                string subj = ""; try { subj = (string)item.Subject; } catch { }
+                string to = ""; try { to = (string)item.To; } catch { }
                 item.DeferredDeliveryTime = when;
                 item.Send();   // moves to the Outbox and is sent automatically at that time
+                WriteScheduled(subj, to, when, remind ? 10 : 0);   // dot notifies when it sends (+ heads-up)
                 Ui.Notify("Scheduled — Axon will send this at " + when.ToString("ddd dd MMM, HH:mm") +
                           ". It waits in your Outbox until then (keep Outlook connected).", "Axon intelligence");
             }
@@ -827,6 +830,32 @@ namespace Axon.OutlookAddin
                     { "created", DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") },
                     { "notified", false },
                 });
+                File.WriteAllText(path, js.Serialize(items));
+            }
+            catch { }
+        }
+
+        // Record a scheduled ('Send Later') send so the always-running dot can notify the user when
+        // its time arrives. Shared file: %APPDATA%\AxonOutlook\scheduled.json (append-only).
+        private void WriteScheduled(string subject, string to, DateTime when, int remindBefore)
+        {
+            try
+            {
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AxonOutlook");
+                Directory.CreateDirectory(dir);
+                string path = Path.Combine(dir, "scheduled.json");
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var items = new System.Collections.Generic.List<object>();
+                try { if (File.Exists(path)) { var arr = js.DeserializeObject(File.ReadAllText(path)) as object[]; if (arr != null) items.AddRange(arr); } }
+                catch { }
+                var entry = new System.Collections.Generic.Dictionary<string, object> {
+                    { "subject", subject ?? "" }, { "to", to ?? "" },
+                    { "when", when.ToString("yyyy-MM-ddTHH:mm:ss") },
+                    { "created", DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") },
+                };
+                if (remindBefore > 0)
+                    entry["remind_at"] = when.AddMinutes(-remindBefore).ToString("yyyy-MM-ddTHH:mm:ss");
+                items.Add(entry);
                 File.WriteAllText(path, js.Serialize(items));
             }
             catch { }
@@ -1093,9 +1122,11 @@ namespace Axon.OutlookAddin
             { "In 1 hour", "This evening (6 PM)", "Tomorrow morning (8 AM)", "In 3 days", "Next Monday (9 AM)" };
         private readonly DateTimePicker _date;
         private readonly ComboBox _time;
+        private readonly CheckBox _remind;
         public DateTime When { get; private set; }
+        public bool Remind { get; private set; }
 
-        public WhenPrompt(string title, string prompt)
+        public WhenPrompt(string title, string prompt, bool showRemind = false)
         {
             Text = "Axon intelligence — " + title;
             StartPosition = FormStartPosition.CenterScreen;
@@ -1115,7 +1146,7 @@ namespace Axon.OutlookAddin
                 var b = new Button { Left = 20, Top = y, Width = W - 40, Height = 32, Text = "   " + Presets[i],
                     TextAlign = System.Drawing.ContentAlignment.MiddleLeft, FlatStyle = FlatStyle.System,
                     Font = new System.Drawing.Font("Segoe UI", 9.75f), Cursor = Cursors.Hand };
-                b.Click += (o, e) => { When = Resolve(idx); DialogResult = DialogResult.OK; Close(); };
+                b.Click += (o, e) => { When = Resolve(idx); Remind = _remind != null && _remind.Checked; DialogResult = DialogResult.OK; Close(); };
                 Controls.Add(b);
                 y += 36;
             }
@@ -1132,6 +1163,15 @@ namespace Axon.OutlookAddin
             Controls.AddRange(new Control[] { orLbl, _date, _time });
             y += 44;
 
+            if (showRemind)
+            {
+                _remind = new CheckBox { Left = 20, Top = y, Width = W - 40, Height = 22,
+                    Text = "Remind me ~10 min before it sends",
+                    Font = new System.Drawing.Font("Segoe UI", 9.25f) };
+                Controls.Add(_remind);
+                y += 30;
+            }
+
             var set = new Button { Text = "Set custom", Left = W - 20 - 95 - 85, Top = y, Width = 95, Height = 28 };
             var cancel = new Button { Text = "Cancel", Left = W - 20 - 80, Top = y, Width = 80, Height = 28, DialogResult = DialogResult.Cancel };
             set.Click += (o, e) =>
@@ -1141,6 +1181,7 @@ namespace Axon.OutlookAddin
                 int.TryParse(parts.Length > 0 ? parts[0] : "9", out hh);
                 if (parts.Length > 1) int.TryParse(parts[1], out mm);
                 When = _date.Value.Date.AddHours(hh).AddMinutes(mm);
+                Remind = _remind != null && _remind.Checked;
                 DialogResult = DialogResult.OK; Close();
             };
             Controls.AddRange(new Control[] { set, cancel });

@@ -135,9 +135,9 @@ def _send_draft_later(eid, iso_when):
     return _run_outlook_ps(_SEND_LATER_PS, {"OL_ID": eid, "OL_WHEN": iso_when}, show=False)
 
 
-def _draft_then_send(out_text, approval_desc, sent_msg, draft_msg):
+def _draft_then_send(out_text, approval_desc, sent_msg, draft_msg, to=""):
     """Shared flow: a draft PS just ran (output_text = DRAFT_OK|<id>|<subject>). Move the draft
-    window onto the dot's monitor, ask the user, then send or leave as a draft."""
+    window onto the dot's monitor, ask the user, then send now / schedule / leave as a draft."""
     if "DRAFT_OK" not in out_text:
         return _result(out_text or "No output from Outlook.", True)
     payload = out_text.split("DRAFT_OK|", 1)[1].strip().splitlines()[0]
@@ -146,13 +146,25 @@ def _draft_then_send(out_text, approval_desc, sent_msg, draft_msg):
     subject = parts[1].strip() if len(parts) > 1 else ""
     _move_window_to_dot(subject)  # bring the open draft window onto the dot's monitor
     decision = _ask_approval(approval_desc, allow_later=True)
-    if isinstance(decision, str) and decision.strip():   # user chose 'Send Later' -> an ISO datetime
-        r = _send_draft_later(eid, decision.strip())
+    iso, remind = "", 0
+    if isinstance(decision, dict):                       # {'send_at': iso, 'remind': bool}
+        iso = (decision.get("send_at") or "").strip()
+        remind = 10 if decision.get("remind") else 0
+    elif isinstance(decision, str):                      # legacy: just an ISO datetime
+        iso = decision.strip()
+    if iso:   # 'Send Later' -> defer delivery, and record it so the dot can notify
+        r = _send_draft_later(eid, iso)
         if "SENT_LATER_OK" in r:
-            when = decision.strip().replace("T", " ")
-            return _result("Scheduled — it will send at " + when + " (waiting in your Outbox until then).", False)
+            try:
+                from axon.scheduled import record
+                record(subject, to, iso, remind_before=remind)
+            except Exception:
+                pass
+            when = iso.replace("T", " ")
+            extra = " I'll remind you ~10 min before it sends." if remind else ""
+            return _result("Scheduled — it will send at " + when + " (waiting in your Outbox until then)." + extra, False)
         return _result("Tried to schedule the send but failed: " + r, True)
-    if decision:
+    if decision is True:
         s = _send_draft(eid)
         if "SENT_OK" in s:
             return _result(sent_msg, False)
@@ -194,7 +206,8 @@ def _send_email(args):
         out,
         f"Send this email to {to}" + (f" — subject: {subj}" if subj else "") + "?",
         f"Sent email to {to}.",
-        f"Drafted the email to {to} and left it open in Outlook for you to review/send (NOT sent).")
+        f"Drafted the email to {to} and left it open in Outlook for you to review/send (NOT sent).",
+        to=to)
 
 
 _OUTLOOK_FORWARD_PS = r'''

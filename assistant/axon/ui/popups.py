@@ -30,6 +30,7 @@ class WhenDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.when = None
+        self.remind = False
         self.setWindowTitle("Send later")
         self.setModal(True)
         self.setStyleSheet(
@@ -59,13 +60,18 @@ class WhenDialog(QtWidgets.QDialog):
         setb.clicked.connect(self._pick_custom)
         row.addWidget(setb)
         lay.addLayout(row)
+        self._remind_cb = QtWidgets.QCheckBox("Remind me ~10 min before it sends")
+        self._remind_cb.setStyleSheet(f"color:{TEXT};{FONT_CSS}font-size:12px;")
+        lay.addWidget(self._remind_cb)
 
     def _pick_preset(self, i):
         self.when = _resolve_preset(i)
+        self.remind = self._remind_cb.isChecked()
         self.accept()
 
     def _pick_custom(self):
         self.when = self._dt.dateTime().toPython()
+        self.remind = self._remind_cb.isChecked()
         self.accept()
 
 
@@ -80,7 +86,7 @@ class ApprovalPopup(QtWidgets.QWidget):
         )
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.resize(450, 172)
-        self.card = PanelFrame(self)
+        self.card = PanelFrame(self, fill_color=PANEL_BG_2)
         lay = QtWidgets.QVBoxLayout(self.card)
         lay.setContentsMargins(20, 18, 20, 16)
         lay.setSpacing(10)
@@ -139,7 +145,8 @@ class ApprovalPopup(QtWidgets.QWidget):
         dlg = WhenDialog(self)
         if dlg.exec() == QtWidgets.QDialog.Accepted and dlg.when is not None:
             self.hide()
-            self.decided.emit(dlg.when.strftime("%Y-%m-%dT%H:%M:%S"))
+            self.decided.emit({"send_at": dlg.when.strftime("%Y-%m-%dT%H:%M:%S"),
+                               "remind": bool(dlg.remind)})
 
     def _decide(self, decision):
         self.hide()
