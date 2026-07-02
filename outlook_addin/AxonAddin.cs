@@ -87,6 +87,7 @@ namespace Axon.OutlookAddin
                    "<button id='axonReply_" + idMso + "' label='Reply with Axon' getImage='GetReplyImage' onAction='OnReply'/>" +
                    "<button id='axonSchedule_" + idMso + "' label='Schedule with Axon' getImage='GetScheduleImage' onAction='OnSchedule'/>" +
                    "<button id='axonFollowUp_" + idMso + "' label='Follow up with Axon' getImage='GetFollowUpImage' onAction='OnFollowUp'/>" +
+                   "<button id='axonAttach_" + idMso + "' label='Forward as attachment' getImage='GetAttachImage' onAction='OnAttachEmail'/>" +
                    "<button id='axonMove_" + idMso + "' label='Move with Axon' getImage='GetMoveImage' onAction='OnFile'/>" +
                    "<button id='axonDownload_" + idMso + "' label='Download with Axon' getImage='GetDownloadImage' onAction='OnDownload'/>" +
                    "</contextMenu>";
@@ -95,7 +96,7 @@ namespace Axon.OutlookAddin
 
         // --- custom ribbon image (the Axon-branded Move icon, distinct from Outlook's built-ins) ---
         private System.Drawing.Image _moveIcon, _downloadIcon, _summarizeIcon, _replyIcon, _scheduleIcon,
-                                     _followUpIcon, _sendLaterIcon, _writeIcon;
+                                     _followUpIcon, _sendLaterIcon, _writeIcon, _attachIcon;
 
         private System.Drawing.Image LoadIcon(string file, ref System.Drawing.Image cache)
         {
@@ -146,6 +147,11 @@ namespace Axon.OutlookAddin
         public stdole.IPictureDisp GetWriteImage(object control)
         {
             try { return RibbonImage.Get(LoadIcon("axon-write.png", ref _writeIcon)); } catch { return null; }
+        }
+
+        public stdole.IPictureDisp GetAttachImage(object control)
+        {
+            try { return RibbonImage.Get(LoadIcon("axon-attach.png", ref _attachIcon)); } catch { return null; }
         }
 
         // --- ribbon button callbacks (Office invokes these by name via IDispatch) ---
@@ -756,6 +762,45 @@ namespace Axon.OutlookAddin
                 return sb.ToString().Trim();
             }
             catch { return ""; }
+        }
+
+        public void OnAttachEmail(object control)
+        {
+            try
+            {
+                dynamic app = _app;
+                var items = new System.Collections.Generic.List<dynamic>();
+                // Prefer the current selection (may be several); fall back to a single open email.
+                try
+                {
+                    dynamic exp = app.ActiveExplorer();
+                    if (exp != null && exp.Selection != null)
+                    {
+                        foreach (dynamic it in exp.Selection)
+                        {
+                            try { if ((int)it.Class == 43) items.Add(it); } catch { }
+                        }
+                    }
+                }
+                catch { }
+                if (items.Count == 0)
+                {
+                    object m = GetSelectedMail();
+                    if (m != null) items.Add((dynamic)m);
+                }
+                if (items.Count == 0) { Ui.Notify("Select an email first.", "Axon intelligence"); return; }
+
+                dynamic nm = app.CreateItem(0);   // olMailItem
+                string firstSubj = "";
+                foreach (dynamic it in items)
+                {
+                    try { nm.Attachments.Add(it); } catch { }   // attach the message as a .msg
+                    if (firstSubj == "") { try { firstSubj = (string)it.Subject; } catch { } }
+                }
+                nm.Subject = items.Count > 1 ? ("FW: " + items.Count + " emails") : ("FW: " + firstSubj);
+                nm.Display();   // open the new email for the user to add a recipient/note and send
+            }
+            catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
         }
 
         public void OnWriteEmail(object control)
