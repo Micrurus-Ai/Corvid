@@ -447,13 +447,13 @@ class FloatingDot(QtWidgets.QWidget):
             return self.screen()
 
     @QtCore.Slot(str)
-    def _on_approval_requested(self, description):
-        self._approval_popup.ask(description, self._active_screen())  # where the composer/dot is
+    def _on_approval_requested(self, description, allow_later=False):
+        self._approval_popup.ask(description, self._active_screen(), allow_later)
 
-    @QtCore.Slot(bool)
-    def _on_approval_decided(self, approved):
+    @QtCore.Slot(object)
+    def _on_approval_decided(self, decision):
         if self._worker:
-            self._worker.resolve_approval(approved)
+            self._worker.resolve_approval(decision)
 
     # ---- profile / inbox auto-filer ----
     def _set_autofile(self, on):

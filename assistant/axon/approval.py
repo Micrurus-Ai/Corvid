@@ -6,12 +6,14 @@ and run_task checks _needs_approval()/_describe_action() before gated tools run.
 _APPROVAL_CB = None
 
 
-def _ask_approval(desc):
+def _ask_approval(desc, allow_later=False):
+    """Ask the user to approve an action. Returns True (do it now), False (skip), or — when
+    allow_later is set (email sends) and the user picks 'Send Later' — an ISO datetime string."""
     cb = _APPROVAL_CB
     if cb is None:
         return True
     try:
-        return bool(cb(desc))
+        return cb(desc, allow_later)
     except Exception:
         return True
 

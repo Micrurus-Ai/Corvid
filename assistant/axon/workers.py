@@ -13,7 +13,7 @@ class AgentWorker(QtCore.QObject):
     status = QtCore.Signal(str)
     finished = QtCore.Signal(str)
     plan = QtCore.Signal(list)               # live checklist: [{task, done}, ...]
-    approval_requested = QtCore.Signal(str)  # describes the pending action; UI must call resolve_approval
+    approval_requested = QtCore.Signal(str, bool)  # (description, allow_send_later); UI calls resolve_approval
 
     def __init__(self, question, approval_mode=False, image_path=None, mode="agent", chat_history=None):
         super().__init__()
@@ -34,18 +34,19 @@ class AgentWorker(QtCore.QObject):
         thread = QtCore.QThread.currentThread()
         return self._cancel_requested or thread.isInterruptionRequested()
 
-    def resolve_approval(self, approved):
-        """Called from the UI thread when the user clicks Approve/Skip."""
-        self._approval_result = bool(approved)
+    def resolve_approval(self, decision):
+        """Called from the UI thread when the user clicks Approve / Skip / Send Later.
+        decision is True (now), False (skip), or an ISO datetime string (send later)."""
+        self._approval_result = decision
         self._approval_event.set()
 
-    def _on_approval(self, description):
-        """Runs in the worker thread: block until the user approves/skips the action."""
+    def _on_approval(self, description, allow_later=False):
+        """Runs in the worker thread: block until the user approves/skips/schedules the action."""
         if not self.approval_mode:
             return True
         self._approval_result = False
         self._approval_event.clear()
-        self.approval_requested.emit(description)
+        self.approval_requested.emit(description, bool(allow_later))
         while not self._approval_event.wait(0.15):
             if self._should_cancel():
                 return False

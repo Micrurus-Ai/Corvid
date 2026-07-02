@@ -114,8 +114,25 @@ try {
 '''
 
 
+_SEND_LATER_PS = r'''
+$ErrorActionPreference = "Stop"
+try {
+    $ol = New-Object -ComObject Outlook.Application
+    $ns = $ol.GetNamespace("MAPI")
+    $m = $ns.GetItemFromID($env:OL_ID)
+    $m.DeferredDeliveryTime = [datetime]$env:OL_WHEN   # hold in Outbox until this time
+    $m.Send()
+    Write-Output "SENT_LATER_OK"
+} catch { Write-Output ("OL_ERROR: " + $_.Exception.Message) }
+'''
+
+
 def _send_draft(eid):
     return _run_outlook_ps(_SEND_DRAFT_PS, {"OL_ID": eid}, show=False)
+
+
+def _send_draft_later(eid, iso_when):
+    return _run_outlook_ps(_SEND_LATER_PS, {"OL_ID": eid, "OL_WHEN": iso_when}, show=False)
 
 
 def _draft_then_send(out_text, approval_desc, sent_msg, draft_msg):
@@ -128,12 +145,19 @@ def _draft_then_send(out_text, approval_desc, sent_msg, draft_msg):
     eid = parts[0].strip()
     subject = parts[1].strip() if len(parts) > 1 else ""
     _move_window_to_dot(subject)  # bring the open draft window onto the dot's monitor
-    if not _ask_approval(approval_desc):
-        return _result(draft_msg, False)
-    s = _send_draft(eid)
-    if "SENT_OK" in s:
-        return _result(sent_msg, False)
-    return _result("Tried to send but failed: " + s, True)
+    decision = _ask_approval(approval_desc, allow_later=True)
+    if isinstance(decision, str) and decision.strip():   # user chose 'Send Later' -> an ISO datetime
+        r = _send_draft_later(eid, decision.strip())
+        if "SENT_LATER_OK" in r:
+            when = decision.strip().replace("T", " ")
+            return _result("Scheduled — it will send at " + when + " (waiting in your Outbox until then).", False)
+        return _result("Tried to schedule the send but failed: " + r, True)
+    if decision:
+        s = _send_draft(eid)
+        if "SENT_OK" in s:
+            return _result(sent_msg, False)
+        return _result("Tried to send but failed: " + s, True)
+    return _result(draft_msg, False)
 
 
 def _send_email(args):
