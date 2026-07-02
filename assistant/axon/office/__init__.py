@@ -13,6 +13,7 @@ from axon.office.decks import ppt_read, ppt_edit
 from axon.office.docs import word_read, word_edit
 from axon.office.sheets import excel_read, excel_edit, excel_analyze
 from axon.office.brand import set_brand, brand_deck, brand_doc
+from axon.office.report import make_report
 from axon.office.imaging import generate_image
 from axon.office.pdf_tools import pdf_read, pdf_extract_tables, pdf_fill_form, pdf_form_fields
 
@@ -169,6 +170,20 @@ TOOLS = [
     _fn("brand_doc",
         "Apply the saved brand to a Word document (brand-colored headings in the brand font, consistent body).",
         {"path": {"type": "string", "description": "Path to the .docx"}}, ["path"]),
+    _fn("make_report",
+        "Build a branded PDF report/proposal from structured content using CODE (accurate, real data "
+        "charts, brand colors, optional logo — no image model, no Office needed). Use for 'make a PDF "
+        "report/proposal/one-pager'. The logo is optional: only used if the brand has one or the user "
+        "gives a logo path — ask the user if they want a logo when it matters.",
+        {"title": {"type": "string"},
+         "subtitle": {"type": "string"},
+         "sections": {"type": "array", "description":
+             "[{heading?, text? (string or [strings]), bullets?[], table?{headers[],rows[[]]}, "
+             "chart?{type:'bar'|'line'|'pie', title?, categories[], series?{name:[vals]}, values?[]}}]",
+             "items": {"type": "object"}},
+         "logo": {"type": "string", "description": "Optional logo image path (else the saved brand logo)"},
+         "filename": {"type": "string", "description": "Optional output file name"}},
+        ["title"]),
     _fn("generate_image",
         "Generate an image from a text prompt and save it as a PNG (then use ppt_edit/word_edit add_image "
         "to place it). Good for slide graphics, illustrations, simple logos.",
@@ -218,6 +233,7 @@ DISPATCH = {
     "set_brand": set_brand,
     "brand_deck": brand_deck,
     "brand_doc": brand_doc,
+    "make_report": make_report,
     "generate_image": generate_image,
     "pdf_read": pdf_read,
     "pdf_extract_tables": pdf_extract_tables,

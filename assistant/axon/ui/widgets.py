@@ -136,27 +136,13 @@ class CloseButton(IconButton):
 
 
 class ProfileButton(IconButton):
-    """Profile / settings entry (sits before the activity icon). Opens the profile panel where the
-    inbox auto-filer and other preferences are toggled."""
+    """Profile / settings entry (sits before the activity icon). Clicking it opens the full
+    Settings panel (assistant options, brand & colors, browsing)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAccessibleName("Profile and settings")
-        menu = QtWidgets.QMenu(self)
-        menu.setStyleSheet(
-            f"QMenu{{background:{SURFACE};color:{TEXT};border:1px solid {BORDER};"
-            f"border-radius:10px;padding:6px;{FONT_CSS}font-size:12px;}}"
-            "QMenu::item{padding:7px 26px 7px 12px;border-radius:7px;}"
-            "QMenu::item:selected{background:#23252e;}"
-        )
-        self.autofile_action = menu.addAction("Auto-file inbox emails")
-        self.autofile_action.setCheckable(True)
-        self.autofile_action.setToolTip("Suggest a folder when you open an unfiled Inbox email")
-        menu.addSeparator()
-        self.signin_action = menu.addAction("Sign in to my browser…")
-        self.signin_action.setToolTip("Open Axon's browser once to sign in to your accounts (Google, "
-                                      "intranet, analytics). Reused for all future browsing.")
-        self.setMenu(menu)
+        self.setAccessibleName("Settings")
+        self.setToolTip("Settings")
 
     def paintEvent(self, _):
         p = QtGui.QPainter(self)

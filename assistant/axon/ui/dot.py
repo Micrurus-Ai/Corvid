@@ -65,10 +65,7 @@ class FloatingDot(QtWidgets.QWidget):
 
         # ---- Inbox auto-filer (toggled in the profile dropdown menu) ----
         self._settings = load_settings()
-        _act = self.composer.profile_btn.autofile_action
-        _act.setChecked(self._settings.get("autofile", False))  # set before connecting, so it won't fire
-        _act.toggled.connect(self._set_autofile)
-        self.composer.profile_btn.signin_action.triggered.connect(self._setup_browser)
+        self.composer.profile_btn.clicked.connect(self._open_settings)
         self.browser_setup_msg.connect(self.composer.append_log)
         self._inbox_watcher = InboxWatcher()
         self._inbox_watcher.opened.connect(self._on_inbox_opened)
@@ -98,7 +95,7 @@ class FloatingDot(QtWidgets.QWidget):
         self._followup_timer = QtCore.QTimer(self)
         self._followup_timer.setInterval(2 * 60 * 1000)    # every 2 minutes
         self._followup_timer.timeout.connect(self._followup_check)
-        if config.IS_WINDOWS:
+        if config.IS_WINDOWS and self._settings.get("proactive", True):
             self._proactive_timer.start()
             self._followup_timer.start()
             QtCore.QTimer.singleShot(60 * 1000, self._proactive_check)  # first check ~1 min after launch
@@ -252,6 +249,31 @@ class FloatingDot(QtWidgets.QWidget):
             except Exception:
                 pass
             self._pending_suggestion = None
+
+    def _open_settings(self):
+        """Open the full Settings panel (assistant options, brand & colors, browsing)."""
+        try:
+            from axon.ui.settings_panel import SettingsPanel
+            dlg = SettingsPanel(self.composer if self.composer.isVisible() else None)
+            dlg.autofile_toggled.connect(self._set_autofile)
+            dlg.proactive_toggled.connect(self._set_proactive)
+            dlg.signin_requested.connect(self._setup_browser)
+            dlg.exec()
+        except Exception as e:
+            self.composer.append_log("Couldn't open settings: " + str(e))
+
+    def _set_proactive(self, on):
+        """Start/stop the proactive meeting-nudge + follow-up reminder timers."""
+        try:
+            if on:
+                if config.IS_WINDOWS:
+                    self._proactive_timer.start()
+                    self._followup_timer.start()
+            else:
+                self._proactive_timer.stop()
+                self._followup_timer.stop()
+        except Exception:
+            pass
 
     def _setup_browser(self):
         """One-time browser sign-in from the profile menu (runs off the UI thread)."""

@@ -31,7 +31,9 @@ _TRIGGERS = ("this file", "this sheet", "this document", "this workbook", "this 
              "this deck", "this presentation", "the file", "the document", "the sheet",
              "the workbook", "the spreadsheet", "open file", "current file", "the open",
              "what i have open", "on my screen", "active file", "this csv", "this excel",
-             "analyse this", "analyze this", "summarize this", "summarise this")
+             "analyse this", "analyze this", "summarize this", "summarise this",
+             "the data", "this data", "these numbers", "the numbers", "this table",
+             "the table", "this report", "these figures")
 
 
 def refers_to_open_doc(text):
