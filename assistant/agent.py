@@ -34,6 +34,7 @@ from axon.inbox_filer import (  # noqa: F401
 )
 from axon.briefing import upcoming_event  # noqa: F401  (proactive meeting nudge)
 from axon.browse import setup_browser  # noqa: F401  (one-time browser sign-in from the UI)
+from axon.followups import due_followups  # noqa: F401  (follow-up reminders from the Outlook add-in)
 
 if __name__ == "__main__":
     try:

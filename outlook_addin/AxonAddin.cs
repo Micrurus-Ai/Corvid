@@ -48,15 +48,31 @@ namespace Axon.OutlookAddin
         {
             // Axon lives ONLY in the right-click menu (no ribbon buttons). Add it to the menu you get
             // on an email in the list, on multiple selected emails, and inside an open/previewed email.
-            string menus;
             if (RibbonID == "Microsoft.Outlook.Explorer")
-                menus = CtxMenu("ContextMenuMailItem") + CtxMenu("ContextMenuReadOnlyMailText");
-            else if (RibbonID == "Microsoft.Outlook.Mail.Read")
-                menus = CtxMenu("ContextMenuReadOnlyMailText");
-            else
-                return null;
+                return CtxUI(CtxMenu("ContextMenuMailItem") + CtxMenu("ContextMenuReadOnlyMailText"));
+            if (RibbonID == "Microsoft.Outlook.Mail.Read")
+                return CtxUI(CtxMenu("ContextMenuReadOnlyMailText"));
+            if (RibbonID == "Microsoft.Outlook.Mail.Compose")
+                return ComposeRibbon();   // compose body right-click is Word's, so use a ribbon button
+            return null;
+        }
+
+        private string CtxUI(string menus)
+        {
             return "<customUI xmlns='http://schemas.microsoft.com/office/2009/07/customui'>" +
                    "<contextMenus>" + menus + "</contextMenus></customUI>";
+        }
+
+        // A small "Send Later" button in an Axon group on the compose Message tab (reliable — the
+        // compose body's right-click menu belongs to the Word editor and can't be extended).
+        private string ComposeRibbon()
+        {
+            return "<customUI xmlns='http://schemas.microsoft.com/office/2009/07/customui'>" +
+                   "<ribbon><tabs><tab idMso='TabNewMailMessage'>" +
+                   "<group id='axonComposeGroup' label='Axon'>" +
+                   "<button id='axonSendLaterBtn' label='Send Later' size='large' " +
+                   "getImage='GetSendLaterImage' onAction='OnSendLater'/>" +
+                   "</group></tab></tabs></ribbon></customUI>";
         }
 
         // Axon's right-click items for a given Office context-menu id (button ids must be unique).
@@ -68,13 +84,16 @@ namespace Axon.OutlookAddin
                    "<button id='axonSummarize_" + idMso + "' label='Summarize with Axon' getImage='GetSummarizeImage' onAction='OnSummarize'/>" +
                    "<button id='axonReply_" + idMso + "' label='Reply with Axon' getImage='GetReplyImage' onAction='OnReply'/>" +
                    "<button id='axonSchedule_" + idMso + "' label='Schedule with Axon' getImage='GetScheduleImage' onAction='OnSchedule'/>" +
+                   "<button id='axonFollowUp_" + idMso + "' label='Follow up with Axon' getImage='GetFollowUpImage' onAction='OnFollowUp'/>" +
                    "<button id='axonMove_" + idMso + "' label='Move with Axon' getImage='GetMoveImage' onAction='OnFile'/>" +
                    "<button id='axonDownload_" + idMso + "' label='Download with Axon' getImage='GetDownloadImage' onAction='OnDownload'/>" +
                    "</contextMenu>";
         }
 
+
         // --- custom ribbon image (the Axon-branded Move icon, distinct from Outlook's built-ins) ---
-        private System.Drawing.Image _moveIcon, _downloadIcon, _summarizeIcon, _replyIcon, _scheduleIcon;
+        private System.Drawing.Image _moveIcon, _downloadIcon, _summarizeIcon, _replyIcon, _scheduleIcon,
+                                     _followUpIcon, _sendLaterIcon;
 
         private System.Drawing.Image LoadIcon(string file, ref System.Drawing.Image cache)
         {
@@ -110,6 +129,16 @@ namespace Axon.OutlookAddin
         public stdole.IPictureDisp GetScheduleImage(object control)
         {
             try { return RibbonImage.Get(LoadIcon("axon-schedule.png", ref _scheduleIcon)); } catch { return null; }
+        }
+
+        public stdole.IPictureDisp GetFollowUpImage(object control)
+        {
+            try { return RibbonImage.Get(LoadIcon("axon-followup.png", ref _followUpIcon)); } catch { return null; }
+        }
+
+        public stdole.IPictureDisp GetSendLaterImage(object control)
+        {
+            try { return RibbonImage.Get(LoadIcon("axon-sendlater.png", ref _sendLaterIcon)); } catch { return null; }
         }
 
         // --- ribbon button callbacks (Office invokes these by name via IDispatch) ---
@@ -722,6 +751,87 @@ namespace Axon.OutlookAddin
             catch { return ""; }
         }
 
+        public void OnSendLater(object control)
+        {
+            try
+            {
+                dynamic app = _app;
+                dynamic insp = app.ActiveInspector();
+                if (insp == null) { Ui.Notify("Open or start an email first, then use Send Later.", "Axon intelligence"); return; }
+                dynamic item = insp.CurrentItem;
+                int cls = 0; try { cls = (int)item.Class; } catch { }
+                if (item == null || cls != 43) { Ui.Notify("Send Later works on an email you're composing.", "Axon intelligence"); return; }
+                DateTime when;
+                using (var p = new WhenPrompt("Send Later", "When should Axon send this email?"))
+                {
+                    if (p.ShowDialog() != DialogResult.OK) return;
+                    when = p.When;
+                }
+                if (when <= DateTime.Now.AddMinutes(1)) { Ui.Notify("Pick a time in the future.", "Axon intelligence"); return; }
+                item.DeferredDeliveryTime = when;
+                item.Send();   // moves to the Outbox and is sent automatically at that time
+                Ui.Notify("Scheduled — Axon will send this at " + when.ToString("ddd dd MMM, HH:mm") +
+                          ". It waits in your Outbox until then (keep Outlook connected).", "Axon intelligence");
+            }
+            catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
+        }
+
+        public void OnFollowUp(object control)
+        {
+            try
+            {
+                object m = GetSelectedMail();
+                if (m == null) { Ui.Notify("Select an email first.", "Axon intelligence"); return; }
+                dynamic mail = m;
+                DateTime when;
+                using (var p = new WhenPrompt("Follow up", "When should Axon remind you to follow up?"))
+                {
+                    if (p.ShowDialog() != DialogResult.OK) return;
+                    when = p.When;
+                }
+                try { mail.FlagRequest = "Follow up"; } catch { }
+                try { mail.TaskStartDate = DateTime.Now; } catch { }
+                try { mail.TaskDueDate = when; } catch { }
+                try { mail.ReminderTime = when; mail.ReminderSet = true; } catch { }
+                try { mail.FlagStatus = 2; } catch { }   // olFlagMarked (visual marker in Outlook)
+                try { mail.Save(); } catch { }
+                WriteFollowUp(mail, when);   // the dot pops a reliable reminder at 'when' (and skips it if replied)
+                Ui.Notify("Follow-up set for " + when.ToString("ddd dd MMM, HH:mm") +
+                          ". Axon will remind you then — unless they've already replied.", "Axon intelligence");
+            }
+            catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
+        }
+
+        // Record a follow-up so the always-running dot can pop a reliable reminder at the due time
+        // (and skip it if a reply arrived). Shared file: %APPDATA%\AxonOutlook\followups.json.
+        private void WriteFollowUp(dynamic mail, DateTime due)
+        {
+            try
+            {
+                string id = ""; try { id = (string)mail.EntryID; } catch { }
+                string subject = ""; try { subject = (string)mail.Subject; } catch { }
+                string who = ""; try { who = (string)mail.SenderName; } catch { }
+                if (string.IsNullOrEmpty(who)) { try { who = (string)mail.To; } catch { } }
+                string topic = ""; try { topic = (string)mail.ConversationTopic; } catch { }
+
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AxonOutlook");
+                Directory.CreateDirectory(dir);
+                string path = Path.Combine(dir, "followups.json");
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var items = new System.Collections.Generic.List<object>();
+                try { if (File.Exists(path)) { var arr = js.DeserializeObject(File.ReadAllText(path)) as object[]; if (arr != null) items.AddRange(arr); } }
+                catch { }
+                items.Add(new System.Collections.Generic.Dictionary<string, object> {
+                    { "id", id }, { "subject", subject }, { "who", who }, { "topic", topic },
+                    { "due", due.ToString("yyyy-MM-ddTHH:mm:ss") },
+                    { "created", DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss") },
+                    { "notified", false },
+                });
+                File.WriteAllText(path, js.Serialize(items));
+            }
+            catch { }
+        }
+
         // --- COM (de)registration: add/remove the Outlook add-in registry entry ---
         private const string AddinKey = @"Software\Microsoft\Office\Outlook\AddIns\Axon.OutlookAddin";
 
@@ -972,6 +1082,84 @@ namespace Axon.OutlookAddin
             });
             th.IsBackground = true;
             th.Start();
+        }
+    }
+
+    // A friendly "when?" picker: one-click preset buttons (the common case) plus a calendar +
+    // time list for a custom time. Used by Send Later and Follow up.
+    internal class WhenPrompt : Form
+    {
+        private static readonly string[] Presets =
+            { "In 1 hour", "This evening (6 PM)", "Tomorrow morning (8 AM)", "In 3 days", "Next Monday (9 AM)" };
+        private readonly DateTimePicker _date;
+        private readonly ComboBox _time;
+        public DateTime When { get; private set; }
+
+        public WhenPrompt(string title, string prompt)
+        {
+            Text = "Axon intelligence — " + title;
+            StartPosition = FormStartPosition.CenterScreen;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false; MinimizeBox = false; ShowIcon = false;
+            BackColor = System.Drawing.Color.White;
+            int W = 380;
+
+            var lbl = new Label { Left = 20, Top = 16, Width = W - 40, Height = 22, Text = prompt,
+                Font = new System.Drawing.Font("Segoe UI", 10f, System.Drawing.FontStyle.Bold) };
+            Controls.Add(lbl);
+
+            int y = 50;
+            for (int i = 0; i < Presets.Length; i++)
+            {
+                int idx = i;
+                var b = new Button { Left = 20, Top = y, Width = W - 40, Height = 32, Text = "   " + Presets[i],
+                    TextAlign = System.Drawing.ContentAlignment.MiddleLeft, FlatStyle = FlatStyle.System,
+                    Font = new System.Drawing.Font("Segoe UI", 9.75f), Cursor = Cursors.Hand };
+                b.Click += (o, e) => { When = Resolve(idx); DialogResult = DialogResult.OK; Close(); };
+                Controls.Add(b);
+                y += 36;
+            }
+
+            y += 8;
+            var orLbl = new Label { Left = 20, Top = y + 3, Width = 56, Height = 22, Text = "Or pick:",
+                ForeColor = System.Drawing.Color.FromArgb(110, 110, 120),
+                TextAlign = System.Drawing.ContentAlignment.MiddleLeft };
+            _date = new DateTimePicker { Left = 80, Top = y, Width = 158, Format = DateTimePickerFormat.Short };
+            _date.Value = DateTime.Now.Date.AddDays(1);
+            _time = new ComboBox { Left = 246, Top = y, Width = 114, DropDownStyle = ComboBoxStyle.DropDown };
+            for (int h = 7; h <= 19; h++) { _time.Items.Add(h.ToString("00") + ":00"); _time.Items.Add(h.ToString("00") + ":30"); }
+            _time.Text = "09:00";
+            Controls.AddRange(new Control[] { orLbl, _date, _time });
+            y += 44;
+
+            var set = new Button { Text = "Set custom", Left = W - 20 - 95 - 85, Top = y, Width = 95, Height = 28 };
+            var cancel = new Button { Text = "Cancel", Left = W - 20 - 80, Top = y, Width = 80, Height = 28, DialogResult = DialogResult.Cancel };
+            set.Click += (o, e) =>
+            {
+                int hh = 9, mm = 0;
+                var parts = (_time.Text ?? "09:00").Split(':');
+                int.TryParse(parts.Length > 0 ? parts[0] : "9", out hh);
+                if (parts.Length > 1) int.TryParse(parts[1], out mm);
+                When = _date.Value.Date.AddHours(hh).AddMinutes(mm);
+                DialogResult = DialogResult.OK; Close();
+            };
+            Controls.AddRange(new Control[] { set, cancel });
+            ClientSize = new System.Drawing.Size(W, y + 44);
+            CancelButton = cancel;
+        }
+
+        private static DateTime Resolve(int i)
+        {
+            DateTime n = DateTime.Now;
+            switch (i)
+            {
+                case 0: return n.AddHours(1);
+                case 1: { DateTime e = n.Date.AddHours(18); return e > n ? e : n.AddHours(1); }
+                case 2: return n.Date.AddDays(1).AddHours(8);
+                case 3: return n.Date.AddDays(3).AddHours(9);
+                case 4: { int add = (8 - (int)n.DayOfWeek) % 7; if (add == 0) add = 7; return n.Date.AddDays(add).AddHours(9); }
+                default: return n.AddHours(1);
+            }
         }
     }
 

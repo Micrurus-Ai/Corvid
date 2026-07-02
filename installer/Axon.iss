@@ -45,6 +45,8 @@ Source: "{#AddinDir}\axon-download.png";  DestDir: "{app}\addin"; Flags: ignorev
 Source: "{#AddinDir}\axon-summarize.png"; DestDir: "{app}\addin"; Flags: ignoreversion
 Source: "{#AddinDir}\axon-reply.png";     DestDir: "{app}\addin"; Flags: ignoreversion
 Source: "{#AddinDir}\axon-schedule.png";  DestDir: "{app}\addin"; Flags: ignoreversion
+Source: "{#AddinDir}\axon-followup.png";  DestDir: "{app}\addin"; Flags: ignoreversion
+Source: "{#AddinDir}\axon-sendlater.png"; DestDir: "{app}\addin"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"

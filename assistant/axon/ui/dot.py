@@ -26,6 +26,7 @@ class FloatingDot(QtWidgets.QWidget):
     hotkey_email = QtCore.Signal(str, str, str)  # (eid, subject, sender) from the global hotkey
     proactive_nudge = QtCore.Signal(object)      # an upcoming event to gently offer help with
     browser_setup_msg = QtCore.Signal(str)       # result of the one-time browser sign-in
+    followup_due = QtCore.Signal(object)         # a follow-up reminder (no reply yet) from the add-in
     _HOTKEY_ID = 0xA17  # Ctrl+Alt+M -> file the email currently open/selected in Outlook
 
     def __init__(self):
@@ -92,9 +93,16 @@ class FloatingDot(QtWidgets.QWidget):
         self._proactive_timer = QtCore.QTimer(self)
         self._proactive_timer.setInterval(5 * 60 * 1000)   # every 5 minutes
         self._proactive_timer.timeout.connect(self._proactive_check)
+        # Follow-up reminders recorded by the Outlook add-in.
+        self.followup_due.connect(self._on_followup_due)
+        self._followup_timer = QtCore.QTimer(self)
+        self._followup_timer.setInterval(2 * 60 * 1000)    # every 2 minutes
+        self._followup_timer.timeout.connect(self._followup_check)
         if config.IS_WINDOWS:
             self._proactive_timer.start()
+            self._followup_timer.start()
             QtCore.QTimer.singleShot(60 * 1000, self._proactive_check)  # first check ~1 min after launch
+            QtCore.QTimer.singleShot(30 * 1000, self._followup_check)
 
         # Tell the backend which window is the dot, so opened apps land on the dot's monitor.
         try:
@@ -259,6 +267,31 @@ class FloatingDot(QtWidgets.QWidget):
                 text = f"Couldn't open the browser: {e}"
             self.browser_setup_msg.emit(text)
         threading.Thread(target=work, daemon=True).start()
+
+    def _followup_check(self):
+        """Poll the add-in's follow-up file; remind (tray) about any now due with no reply yet."""
+        def work():
+            try:
+                for it in (agent.due_followups() or []):
+                    self.followup_due.emit(it)
+            except Exception:
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    @QtCore.Slot(object)
+    def _on_followup_due(self, it):
+        who = (it.get("who") or "someone").split("<")[0].strip()
+        subject = it.get("subject") or "your email"
+        self._pending_suggestion = (
+            f"Draft a follow-up email to {who} about \"{subject}\" — they haven't replied yet.")
+        if self._tray:
+            try:
+                self._tray.showMessage(
+                    "Follow-up due — no reply yet",
+                    f"{who} hasn't replied about “{subject}”. Click to draft a follow-up.",
+                    self._tray_icon(), 10000)
+            except Exception:
+                pass
 
     def _proactive_check(self):
         """Background-poll Outlook for an imminent meeting; emit a nudge if there's a new one."""
