@@ -114,8 +114,10 @@ def run_task(question, on_status=None, should_cancel=None, on_approval=None, ima
             _mime = mimetypes.guess_type(image_path)[0] or "image/png"
             user_content = [
                 {"type": "text", "text": (question or "").strip()
-                    + "\n\n[The user attached this screenshot. If they are asking about it, answer "
-                      "directly from the image; otherwise use it as context for the task.]"},
+                    + "\n\n[The user attached a screenshot, saved at: " + image_path + " . If they are "
+                      "asking ABOUT it, answer directly from the image. If they ask to email/send/save/"
+                      "attach it, use this exact file path (e.g. pass it in send_email's attachments) — "
+                      "do NOT take a new screenshot. Otherwise use it as context for the task.]"},
                 {"type": "image_url", "image_url": {"url": f"data:{_mime};base64,{_b64}"}},
             ]
         except Exception:
