@@ -49,8 +49,9 @@ Source: "{#AddinDir}\axon-followup.png";  DestDir: "{app}\addin"; Flags: ignorev
 Source: "{#AddinDir}\axon-sendlater.png"; DestDir: "{app}\addin"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
-Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+; AppUserModelID must match APP_ID in axon/notify.py so Windows toasts show under "Axon intelligence".
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "AxonIntelligence.Dot"
+Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopicon; AppUserModelID: "AxonIntelligence.Dot"
 
 [Registry]
 ; Start the dot at sign-in (optional task). The Outlook add-in COM registration is done in [Code]

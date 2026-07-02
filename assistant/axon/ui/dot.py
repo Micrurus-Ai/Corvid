@@ -31,6 +31,10 @@ class FloatingDot(QtWidgets.QWidget):
 
     def __init__(self):
         super().__init__()
+        try:
+            agent.set_app_id()   # tag the process so Windows toasts group under 'Axon intelligence'
+        except Exception:
+            pass
         self.setWindowFlags(
             QtCore.Qt.FramelessWindowHint
             | QtCore.Qt.WindowStaysOnTopHint
@@ -300,20 +304,39 @@ class FloatingDot(QtWidgets.QWidget):
                 pass
         threading.Thread(target=work, daemon=True).start()
 
+    def _show_toast(self, title, message, suggestion=None):
+        """A real Windows toast (Action Center, DND-aware) PLUS an in-app slide-in alert as a
+        guaranteed-visible fallback."""
+        # Real OS notification (off the UI thread — it shells out to PowerShell/WinRT).
+        try:
+            import agent
+            threading.Thread(target=lambda: agent.os_notify(title, message), daemon=True).start()
+        except Exception:
+            pass
+        # In-app alert (always visible regardless of Windows notification settings).
+        try:
+            from axon.ui.toast import Toast
+            t = Toast(title, message, "Draft" if suggestion else None)
+            if suggestion:
+                def act(s=suggestion):
+                    self._pending_suggestion = s
+                    self._summon()
+                t.clicked.connect(act)
+            t.show_at(self._screen_for_dot().availableGeometry())
+            self._toasts = [x for x in getattr(self, "_toasts", []) if x.isVisible()]
+            self._toasts.append(t)
+        except Exception:
+            pass
+
     @QtCore.Slot(object)
     def _on_followup_due(self, it):
         who = (it.get("who") or "someone").split("<")[0].strip()
         subject = it.get("subject") or "your email"
         self._pending_suggestion = (
             f"Draft a follow-up email to {who} about \"{subject}\" — they haven't replied yet.")
-        if self._tray:
-            try:
-                self._tray.showMessage(
-                    "Follow-up due — no reply yet",
-                    f"{who} hasn't replied about “{subject}”. Click to draft a follow-up.",
-                    self._tray_icon(), 10000)
-            except Exception:
-                pass
+        self._show_toast("Follow-up due — no reply yet",
+                         f"{who} hasn't replied about \"{subject}\".",
+                         self._pending_suggestion)
 
     def _proactive_check(self):
         """Background-poll Outlook for an imminent meeting; emit a nudge if there's a new one."""
@@ -333,13 +356,8 @@ class FloatingDot(QtWidgets.QWidget):
         mins = ev.get("minutes", 0)
         self._pending_suggestion = f"Prep me for my meeting \"{subj}\": pull recent emails and context about it."
         when = "now" if mins <= 0 else f"in {mins} min"
-        if self._tray:
-            try:
-                self._tray.showMessage(
-                    "Upcoming meeting", f"“{subj}” {when} — click to have Axon prep you.",
-                    self._tray_icon(), 9000)
-            except Exception:
-                pass
+        self._show_toast("Upcoming meeting", f"\"{subj}\" {when} — prep with Axon?",
+                         self._pending_suggestion)
 
     def _notify_done(self, result):
         """Toast the result if the user isn't looking at the panel, so they can walk away while it works."""
