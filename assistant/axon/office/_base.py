@@ -44,7 +44,8 @@ def _run_ps(script, env=None, timeout=240):
     try:
         p = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", f.name],
-            capture_output=True, text=True, env=e, timeout=timeout, creationflags=NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=e, timeout=timeout, creationflags=NO_WINDOW,
         )
         out = (p.stdout or "").strip()
         err = (p.stderr or "").strip()

@@ -201,10 +201,11 @@ class HighlightOverlay(QtWidgets.QWidget):
 
 
 class PanelFrame(QtWidgets.QFrame):
-    def __init__(self, parent=None, fill_color=None):
+    def __init__(self, parent=None, fill_color=None, border_color=None):
         super().__init__(parent)
         self.setAttribute(QtCore.Qt.WA_StyledBackground, False)
         self._fill_color = fill_color or PANEL_BG
+        self._border_color = border_color
 
     def paintEvent(self, _):
         p = QtGui.QPainter(self)
@@ -215,10 +216,13 @@ class PanelFrame(QtWidgets.QFrame):
 
         p.fillPath(path, QtGui.QColor(self._fill_color))
 
-        highlight = QtGui.QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        highlight.setColorAt(0, QtGui.QColor(255, 255, 255, 30))
-        highlight.setColorAt(1, QtGui.QColor(255, 255, 255, 6))
-        p.setPen(QtGui.QPen(QtGui.QBrush(highlight), 1))
+        if self._border_color:
+            p.setPen(QtGui.QPen(QtGui.QColor(self._border_color), 1))
+        else:
+            highlight = QtGui.QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            highlight.setColorAt(0, QtGui.QColor(255, 255, 255, 30))
+            highlight.setColorAt(1, QtGui.QColor(255, 255, 255, 6))
+            p.setPen(QtGui.QPen(QtGui.QBrush(highlight), 1))
         p.drawPath(path)
 
 

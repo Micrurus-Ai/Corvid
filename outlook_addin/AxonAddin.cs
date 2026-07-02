@@ -70,6 +70,8 @@ namespace Axon.OutlookAddin
             return "<customUI xmlns='http://schemas.microsoft.com/office/2009/07/customui'>" +
                    "<ribbon><tabs><tab idMso='TabNewMailMessage'>" +
                    "<group id='axonComposeGroup' label='Axon'>" +
+                   "<button id='axonWriteBtn' label='Write with Axon' size='large' " +
+                   "getImage='GetWriteImage' onAction='OnWriteEmail'/>" +
                    "<button id='axonSendLaterBtn' label='Send Later' size='large' " +
                    "getImage='GetSendLaterImage' onAction='OnSendLater'/>" +
                    "</group></tab></tabs></ribbon></customUI>";
@@ -93,7 +95,7 @@ namespace Axon.OutlookAddin
 
         // --- custom ribbon image (the Axon-branded Move icon, distinct from Outlook's built-ins) ---
         private System.Drawing.Image _moveIcon, _downloadIcon, _summarizeIcon, _replyIcon, _scheduleIcon,
-                                     _followUpIcon, _sendLaterIcon;
+                                     _followUpIcon, _sendLaterIcon, _writeIcon;
 
         private System.Drawing.Image LoadIcon(string file, ref System.Drawing.Image cache)
         {
@@ -139,6 +141,11 @@ namespace Axon.OutlookAddin
         public stdole.IPictureDisp GetSendLaterImage(object control)
         {
             try { return RibbonImage.Get(LoadIcon("axon-sendlater.png", ref _sendLaterIcon)); } catch { return null; }
+        }
+
+        public stdole.IPictureDisp GetWriteImage(object control)
+        {
+            try { return RibbonImage.Get(LoadIcon("axon-write.png", ref _writeIcon)); } catch { return null; }
         }
 
         // --- ribbon button callbacks (Office invokes these by name via IDispatch) ---
@@ -751,6 +758,91 @@ namespace Axon.OutlookAddin
             catch { return ""; }
         }
 
+        public void OnWriteEmail(object control)
+        {
+            try
+            {
+                dynamic app = _app;
+                dynamic insp = app.ActiveInspector();
+                if (insp == null) { Ui.Notify("Open a new email first, then click Write with Axon.", "Axon intelligence"); return; }
+                dynamic item = insp.CurrentItem;
+                int cls = 0; try { cls = (int)item.Class; } catch { }
+                if (item == null || cls != 43) { Ui.Notify("Write with Axon works on an email you're composing.", "Axon intelligence"); return; }
+                string me = ""; try { me = (string)app.Session.CurrentUser.Name; } catch { }
+
+                string draft = null;
+                using (var prompt = new WritePrompt(
+                    (instr, lang) => ModelComplete(BuildWritePrompt(instr, me, lang), 0.5)))
+                {
+                    if (prompt.ShowDialog() != DialogResult.OK) return;
+                    draft = prompt.Draft;
+                }
+                if (string.IsNullOrEmpty(draft)) { Ui.Notify("Couldn't write the email (model unavailable).", "Axon intelligence"); return; }
+
+                // Consume the leading "To:" / "Subject:" header lines; the rest is the body.
+                string to = null, subject = null;
+                var lines = draft.Replace("\r\n", "\n").Split('\n');
+                int bstart = 0;
+                for (; bstart < lines.Length; bstart++)
+                {
+                    string ln = lines[bstart].Trim();
+                    if (ln.Length == 0) { if (to != null || subject != null) { bstart++; break; } continue; }
+                    if (to == null && ln.StartsWith("To:", StringComparison.OrdinalIgnoreCase)) { to = ln.Substring(3).Trim(); continue; }
+                    if (subject == null && ln.StartsWith("Subject:", StringComparison.OrdinalIgnoreCase)) { subject = ln.Substring(8).Trim(); continue; }
+                    break;   // first non-header line -> body starts here
+                }
+                var bodySb = new System.Text.StringBuilder();
+                for (int j = bstart; j < lines.Length; j++) bodySb.AppendLine(lines[j]);
+                string body = bodySb.ToString().Trim();
+                if (string.IsNullOrEmpty(body)) body = draft;   // fallback if no headers were found
+
+                if (!string.IsNullOrEmpty(to))
+                {
+                    try
+                    {
+                        string curTo = (string)item.To;
+                        if (string.IsNullOrWhiteSpace(curTo))
+                        {
+                            item.To = to;
+                            try { item.Recipients.ResolveAll(); } catch { }   // resolve the name to an address
+                        }
+                    }
+                    catch { }
+                }
+                if (!string.IsNullOrEmpty(subject))
+                {
+                    try { string cur = (string)item.Subject; if (string.IsNullOrWhiteSpace(cur)) item.Subject = subject; } catch { }
+                }
+                // Write the body into the open compose window (HTML) for the user to review + send.
+                try
+                {
+                    string html = (string)item.HTMLBody;
+                    string draftHtml = "<div style='font-family:Calibri,sans-serif;font-size:11pt;'>" + ToHtml(body) + "</div>";
+                    int bi = html.IndexOf("<body", StringComparison.OrdinalIgnoreCase);
+                    int gt = bi >= 0 ? html.IndexOf('>', bi) : -1;
+                    item.HTMLBody = gt >= 0 ? html.Substring(0, gt + 1) + draftHtml + html.Substring(gt + 1) : draftHtml + html;
+                }
+                catch { try { item.Body = body; } catch { } }
+            }
+            catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
+        }
+
+        private string BuildWritePrompt(string instruction, string me, string lang)
+        {
+            string langLine = string.IsNullOrEmpty(lang)
+                ? "Write the email in the same language the description is written in."
+                : "Write the ENTIRE email in " + lang + ".";
+            string tone = MyToneGuide();
+            string toneLine = string.IsNullOrEmpty(tone) ? "" : " Match the user's personal writing style:\n" + tone + "\n";
+            return "Write a complete, professional email based on this description from the user:\n" + instruction +
+                   "\n\nBegin with an appropriate greeting and end with a courteous sign-off" +
+                   (string.IsNullOrWhiteSpace(me) ? "" : " from " + me) + ". " + langLine + toneLine +
+                   " At the very top, output these header lines (each on its own line): " +
+                   "'To: <the recipient's name or email address if the description names one, otherwise leave " +
+                   "it blank>' and 'Subject: <a short, clear subject>'. Then a blank line, then the email body " +
+                   "(greeting addressed to the recipient by first name, message, sign-off). Output only that — no notes.";
+        }
+
         public void OnSendLater(object control)
         {
             try
@@ -1114,6 +1206,74 @@ namespace Axon.OutlookAddin
         }
     }
 
+    // Asks the user WHAT the email should be about (+ language), then Axon writes it (off the UI thread).
+    internal class WritePrompt : Form
+    {
+        private readonly TextBox _box;
+        private readonly ComboBox _lang;
+        private readonly Func<string, string, string> _writer;   // (description, language) -> email text
+        private readonly Button _writeBtn;
+        private readonly Label _status;
+        public string Draft { get; private set; }
+
+        public WritePrompt(Func<string, string, string> writer)
+        {
+            _writer = writer;
+            Text = "Axon intelligence — Write email";
+            StartPosition = FormStartPosition.CenterScreen;
+            ClientSize = new System.Drawing.Size(500, 322);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false; MinimizeBox = false; ShowIcon = false;
+            BackColor = System.Drawing.Color.White;
+
+            var t1 = new Label { Left = 20, Top = 16, Width = 460, Height = 20, Text = "Write an email with Axon",
+                Font = new System.Drawing.Font("Segoe UI", 10f, System.Drawing.FontStyle.Bold) };
+            var t2 = new Label { Left = 20, Top = 44, Width = 460, Height = 36,
+                Text = "What should this email be about? Who it's to, the purpose, and any key points:",
+                ForeColor = System.Drawing.Color.FromArgb(110, 110, 120) };
+            _box = new TextBox { Left = 20, Top = 84, Width = 460, Height = 120, Multiline = true,
+                ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.FixedSingle,
+                Font = new System.Drawing.Font("Segoe UI", 9.75f) };
+            var langLbl = new Label { Left = 20, Top = 218, Width = 60, Height = 22, Text = "Write in:",
+                TextAlign = System.Drawing.ContentAlignment.MiddleLeft };
+            _lang = new ComboBox { Left = 82, Top = 215, Width = 210, Height = 24, DropDownStyle = ComboBoxStyle.DropDownList };
+            _lang.Items.AddRange(new object[] { "Auto (match my description)", "English", "Nederlands (Dutch)", "Français (French)" });
+            _lang.SelectedIndex = 0;
+            _status = new Label { Left = 20, Top = 258, Width = 260, Height = 20, Text = "",
+                ForeColor = System.Drawing.Color.FromArgb(110, 110, 120) };
+            _writeBtn = new Button { Text = "Write email", Left = 300, Top = 286, Width = 110, Height = 28 };
+            var cancel = new Button { Text = "Cancel", Left = 415, Top = 286, Width = 65, Height = 28, DialogResult = DialogResult.Cancel };
+            _writeBtn.Click += (o, e) => DoWrite();
+            Controls.AddRange(new Control[] { t1, t2, _box, langLbl, _lang, _status, _writeBtn, cancel });
+            AcceptButton = _writeBtn;
+            CancelButton = cancel;
+        }
+
+        private static string LangCode(string display)
+        {
+            if (display.StartsWith("Eng")) return "English";
+            if (display.StartsWith("Ned")) return "Dutch";
+            if (display.StartsWith("Fr")) return "French";
+            return "";   // Auto
+        }
+
+        private void DoWrite()
+        {
+            if (_box.Text.Trim().Length == 0) { _status.Text = "Describe the email first."; return; }
+            _writeBtn.Enabled = false;
+            _status.Text = "Writing…";
+            string instr = _box.Text;
+            string lang = LangCode(_lang.SelectedItem.ToString());
+            var th = new System.Threading.Thread(() =>
+            {
+                string d = _writer(instr, lang);
+                try { BeginInvoke(new Action(() => { Draft = d; DialogResult = DialogResult.OK; Close(); })); } catch { }
+            });
+            th.IsBackground = true;
+            th.Start();
+        }
+    }
+
     // A friendly "when?" picker: one-click preset buttons (the common case) plus a calendar +
     // time list for a custom time. Used by Send Later and Follow up.
     internal class WhenPrompt : Form
@@ -1155,11 +1315,12 @@ namespace Axon.OutlookAddin
             var orLbl = new Label { Left = 20, Top = y + 3, Width = 56, Height = 22, Text = "Or pick:",
                 ForeColor = System.Drawing.Color.FromArgb(110, 110, 120),
                 TextAlign = System.Drawing.ContentAlignment.MiddleLeft };
+            DateTime soon = DateTime.Now.AddHours(1);
             _date = new DateTimePicker { Left = 80, Top = y, Width = 158, Format = DateTimePickerFormat.Short };
-            _date.Value = DateTime.Now.Date.AddDays(1);
+            _date.Value = soon.Date;   // default to TODAY — same-day sends are the common case
             _time = new ComboBox { Left = 246, Top = y, Width = 114, DropDownStyle = ComboBoxStyle.DropDown };
             for (int h = 7; h <= 19; h++) { _time.Items.Add(h.ToString("00") + ":00"); _time.Items.Add(h.ToString("00") + ":30"); }
-            _time.Text = "09:00";
+            _time.Text = soon.ToString("HH:mm");   // ~1 hour from now, so it's already in the future
             Controls.AddRange(new Control[] { orLbl, _date, _time });
             y += 44;
 

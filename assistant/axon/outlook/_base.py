@@ -83,10 +83,13 @@ def _run_outlook_ps(ps, extra_env, show=True):
     # If this script drives Outlook, first make Outlook visible so nothing happens behind the scenes.
     if show and "Outlook.Application" in ps:
         ps = _SHOW_OUTLOOK_SNIPPET + "\n" + ps
+    # Emit UTF-8 so email bodies with accented/special characters don't crash decoding.
+    ps = "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}\n" + ps
     try:
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-            capture_output=True, text=True, env=env, timeout=90, creationflags=NO_WINDOW,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=env, timeout=90, creationflags=NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return "OL_ERROR: Outlook operation timed out."

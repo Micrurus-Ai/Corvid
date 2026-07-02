@@ -1,12 +1,19 @@
 """Frameless popups: action approval and inbox folder-pick."""
 import datetime
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
 
-import agent
 from axon.ui.highlight import PanelFrame
-from axon.ui.theme import (ACCENT, ACCENT_2, PANEL_BG, PANEL_BG_2, SURFACE, BORDER, TEXT,
-                            MUTED, FONT_FAMILY, FONT_CSS, HEADER_ICON_SIZE, CONTROL_ICON_SIZE)
+from axon.ui.theme import FONT_CSS
+
+POPUP_BG = "#F7F1E8"
+POPUP_SURFACE = "#FFF9F0"
+POPUP_SURFACE_2 = "#EFE4D4"
+POPUP_BORDER = "#D8CBB9"
+POPUP_TEXT = "#191611"
+POPUP_MUTED = "#70685D"
+POPUP_PRIMARY = "#111111"
+POPUP_PRIMARY_TEXT = "#FFF9F0"
 
 
 def _resolve_preset(i):
@@ -34,12 +41,14 @@ class WhenDialog(QtWidgets.QDialog):
         self.setWindowTitle("Send later")
         self.setModal(True)
         self.setStyleSheet(
-            f"QDialog{{background:{PANEL_BG};}}"
-            f"QLabel{{color:{TEXT};{FONT_CSS}font-size:12px;}}"
-            f"QPushButton{{background:{SURFACE};color:{TEXT};border:1px solid {BORDER};"
-            "border-radius:8px;padding:8px 12px;text-align:left;}"
-            f"QPushButton:hover{{border:1px solid {ACCENT};}}"
-            f"QDateTimeEdit{{background:{SURFACE};color:{TEXT};border:1px solid {BORDER};border-radius:8px;padding:6px;}}")
+            f"QDialog{{background:{POPUP_BG};}}"
+            f"QLabel{{color:{POPUP_TEXT};{FONT_CSS}font-size:12px;}}"
+            f"QPushButton{{background:{POPUP_SURFACE};color:{POPUP_TEXT};border:1px solid {POPUP_BORDER};"
+            "border-radius:9px;padding:9px 12px;text-align:left;font-weight:600;}"
+            f"QPushButton:hover{{background:{POPUP_SURFACE_2};border:1px solid #C6B69F;}}"
+            f"QDateTimeEdit{{background:{POPUP_SURFACE};color:{POPUP_TEXT};border:1px solid {POPUP_BORDER};"
+            "border-radius:9px;padding:7px;}}"
+            f"QCheckBox{{color:{POPUP_TEXT};{FONT_CSS}font-size:12px;spacing:8px;}}")
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(16, 14, 16, 14)
         lay.setSpacing(8)
@@ -51,7 +60,7 @@ class WhenDialog(QtWidgets.QDialog):
             lay.addWidget(b)
         row = QtWidgets.QHBoxLayout()
         row.addWidget(QtWidgets.QLabel("Or:"))
-        self._dt = QtWidgets.QDateTimeEdit(QtCore.QDateTime.currentDateTime().addDays(1))
+        self._dt = QtWidgets.QDateTimeEdit(QtCore.QDateTime.currentDateTime().addSecs(3600))
         self._dt.setCalendarPopup(True)
         self._dt.setDisplayFormat("ddd dd MMM yyyy  HH:mm")
         row.addWidget(self._dt, 1)
@@ -61,7 +70,6 @@ class WhenDialog(QtWidgets.QDialog):
         row.addWidget(setb)
         lay.addLayout(row)
         self._remind_cb = QtWidgets.QCheckBox("Remind me ~10 min before it sends")
-        self._remind_cb.setStyleSheet(f"color:{TEXT};{FONT_CSS}font-size:12px;")
         lay.addWidget(self._remind_cb)
 
     def _pick_preset(self, i):
@@ -86,16 +94,16 @@ class ApprovalPopup(QtWidgets.QWidget):
         )
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.resize(450, 172)
-        self.card = PanelFrame(self, fill_color=PANEL_BG_2)
+        self.card = PanelFrame(self, fill_color=POPUP_BG, border_color=POPUP_BORDER)
         lay = QtWidgets.QVBoxLayout(self.card)
         lay.setContentsMargins(20, 18, 20, 16)
         lay.setSpacing(10)
         title = QtWidgets.QLabel("Approve this action?")
-        title.setStyleSheet(f"color:{TEXT};{FONT_CSS}font-size:15px;font-weight:700;")
+        title.setStyleSheet(f"color:{POPUP_TEXT};{FONT_CSS}font-size:15px;font-weight:700;")
         lay.addWidget(title)
         self.msg = QtWidgets.QLabel("")
         self.msg.setWordWrap(True)
-        self.msg.setStyleSheet(f"color:{ACCENT_2};{FONT_CSS}font-size:13px;")
+        self.msg.setStyleSheet(f"color:{POPUP_TEXT};{FONT_CSS}font-size:13px;")
         lay.addWidget(self.msg, 1)
         row = QtWidgets.QHBoxLayout()
         row.addStretch(1)
@@ -104,15 +112,15 @@ class ApprovalPopup(QtWidgets.QWidget):
         approve = QtWidgets.QPushButton("Approve")
         for b in (skip, self._later_btn, approve):
             b.setCursor(QtCore.Qt.PointingHandCursor)
-        _ghost = (f"QPushButton{{background:{SURFACE};color:{TEXT};border:1px solid {BORDER};"
+        _ghost = (f"QPushButton{{background:{POPUP_SURFACE};color:{POPUP_TEXT};border:1px solid {POPUP_BORDER};"
                   f"border-radius:10px;padding:8px 16px;{FONT_CSS}font-size:13px;font-weight:600;}}"
-                  "QPushButton:hover{background:#1a1b22;}")
+                  f"QPushButton:hover{{background:{POPUP_SURFACE_2};border:1px solid #C6B69F;}}")
         skip.setStyleSheet(_ghost)
         self._later_btn.setStyleSheet(_ghost)
         approve.setStyleSheet(
-            f"QPushButton{{background:#ffffff;color:#0a0a0c;border:none;"
+            f"QPushButton{{background:{POPUP_PRIMARY};color:{POPUP_PRIMARY_TEXT};border:none;"
             f"border-radius:10px;padding:8px 20px;{FONT_CSS}font-size:13px;font-weight:700;}}"
-            "QPushButton:hover{background:#e9e9ee;}")
+            "QPushButton:hover{background:#2a2721;}")
         skip.clicked.connect(lambda: self._decide(False))
         self._later_btn.clicked.connect(self._pick_later)
         approve.clicked.connect(lambda: self._decide(True))
@@ -166,17 +174,17 @@ class FolderPickPopup(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.resize(440, 250)
         self._eid = None
-        self.card = PanelFrame(self)
+        self.card = PanelFrame(self, fill_color=POPUP_BG, border_color=POPUP_BORDER)
         self._lay = QtWidgets.QVBoxLayout(self.card)
         self._lay.setContentsMargins(20, 18, 20, 16)
         self._lay.setSpacing(10)
 
         title = QtWidgets.QLabel("File this email?")
-        title.setStyleSheet(f"color:{TEXT};{FONT_CSS}font-size:15px;font-weight:700;")
+        title.setStyleSheet(f"color:{POPUP_TEXT};{FONT_CSS}font-size:15px;font-weight:700;")
         self._lay.addWidget(title)
         self.info = QtWidgets.QLabel("")
         self.info.setWordWrap(True)
-        self.info.setStyleSheet(f"color:{ACCENT_2};{FONT_CSS}font-size:12px;")
+        self.info.setStyleSheet(f"color:{POPUP_MUTED};{FONT_CSS}font-size:12px;")
         self._lay.addWidget(self.info)
 
         self._sugg_box = QtWidgets.QVBoxLayout()
@@ -187,16 +195,18 @@ class FolderPickPopup(QtWidgets.QWidget):
         row.setSpacing(8)
         self.other = QtWidgets.QComboBox()
         self.other.setStyleSheet(
-            f"QComboBox{{background:{SURFACE};color:{TEXT};border:1px solid {BORDER};border-radius:9px;"
+            f"QComboBox{{background:{POPUP_SURFACE};color:{POPUP_TEXT};border:1px solid {POPUP_BORDER};border-radius:9px;"
             f"padding:6px 10px;{FONT_CSS}font-size:12px;}}"
             "QComboBox::drop-down{border:0;width:18px;}"
-            f"QComboBox QAbstractItemView{{background:{SURFACE};color:{TEXT};selection-background-color:#23252e;}}")
+            f"QComboBox QAbstractItemView{{background:{POPUP_SURFACE};color:{POPUP_TEXT};"
+            f"selection-background-color:{POPUP_SURFACE_2};selection-color:{POPUP_TEXT};}}")
         row.addWidget(self.other, 1)
         self.move_other = QtWidgets.QPushButton("Move")
         self.move_other.setCursor(QtCore.Qt.PointingHandCursor)
         self.move_other.setStyleSheet(
-            f"QPushButton{{background:{SURFACE};color:{TEXT};border:1px solid {BORDER};border-radius:9px;"
-            f"padding:7px 14px;{FONT_CSS}font-size:12px;font-weight:600;}}QPushButton:hover{{background:#1a1b22;}}")
+            f"QPushButton{{background:{POPUP_PRIMARY};color:{POPUP_PRIMARY_TEXT};border:1px solid {POPUP_PRIMARY};"
+            f"border-radius:9px;padding:7px 14px;{FONT_CSS}font-size:12px;font-weight:700;}}"
+            "QPushButton:hover{background:#2a2721;}")
         self.move_other.clicked.connect(self._move_other)
         row.addWidget(self.move_other)
         self._lay.addLayout(row)
@@ -206,8 +216,8 @@ class FolderPickPopup(QtWidgets.QWidget):
         keep = QtWidgets.QPushButton("Keep in Inbox")
         keep.setCursor(QtCore.Qt.PointingHandCursor)
         keep.setStyleSheet(
-            f"QPushButton{{background:transparent;color:{MUTED};border:none;{FONT_CSS}font-size:12px;}}"
-            f"QPushButton:hover{{color:{TEXT};}}")
+            f"QPushButton{{background:transparent;color:{POPUP_MUTED};border:none;{FONT_CSS}font-size:12px;}}"
+            f"QPushButton:hover{{color:{POPUP_TEXT};}}")
         keep.clicked.connect(self._keep)
         keep_row.addWidget(keep)
         self._lay.addLayout(keep_row)
@@ -236,15 +246,15 @@ class FolderPickPopup(QtWidgets.QWidget):
             b = QtWidgets.QPushButton("→  " + name)
             b.setCursor(QtCore.Qt.PointingHandCursor)
             b.setStyleSheet(
-                f"QPushButton{{background:#ffffff;color:#0a0a0c;border:none;border-radius:9px;"
+                f"QPushButton{{background:{POPUP_SURFACE};color:{POPUP_TEXT};border:1px solid {POPUP_BORDER};border-radius:9px;"
                 f"padding:8px 12px;text-align:left;{FONT_CSS}font-size:13px;font-weight:700;}}"
-                "QPushButton:hover{background:#e9e9ee;}")
+                f"QPushButton:hover{{background:{POPUP_SURFACE_2};}}")
             b.clicked.connect(lambda _=False, n=name: self._pick(n))
             self._sugg_box.addWidget(b)
         self.other.clear()
         self.other.addItems(folders or [])
         self.adjustSize()
-        self.resize(max(440, self.width()), self.sizeHint().height())
+        self.resize(max(440, self.width()), max(250, self.sizeHint().height()))
         geo = (screen.availableGeometry() if screen is not None
                else QtWidgets.QApplication.primaryScreen().availableGeometry())
         self.move(geo.right() - self.width() - 40, geo.top() + 80)

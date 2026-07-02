@@ -47,6 +47,7 @@ Source: "{#AddinDir}\axon-reply.png";     DestDir: "{app}\addin"; Flags: ignorev
 Source: "{#AddinDir}\axon-schedule.png";  DestDir: "{app}\addin"; Flags: ignoreversion
 Source: "{#AddinDir}\axon-followup.png";  DestDir: "{app}\addin"; Flags: ignoreversion
 Source: "{#AddinDir}\axon-sendlater.png"; DestDir: "{app}\addin"; Flags: ignoreversion
+Source: "{#AddinDir}\axon-write.png";     DestDir: "{app}\addin"; Flags: ignoreversion
 
 [Icons]
 ; AppUserModelID must match APP_ID in axon/notify.py so Windows toasts show under "Axon intelligence".

@@ -1,7 +1,10 @@
 """Settings popup opened from the profile icon."""
+import threading
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from axon.settings import load_settings, save_settings
+from axon.outlook.tone import my_tone, save_tone, learn_my_tone
 from axon.ui.theme import PANEL_BG, PANEL_BG_2, SURFACE, SURFACE_2, BORDER, TEXT, MUTED, FONT_CSS
 
 _DEF = {"primary": "1F3A5F", "accent": "E07A2F", "text": "222222", "light": "FFFFFF", "logo": ""}
@@ -11,6 +14,7 @@ class SettingsPanel(QtWidgets.QDialog):
     autofile_toggled = QtCore.Signal(bool)
     proactive_toggled = QtCore.Signal(bool)
     signin_requested = QtCore.Signal()
+    tone_learned = QtCore.Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -73,6 +77,28 @@ class SettingsPanel(QtWidgets.QDialog):
         )
         self._proactive.setChecked(self._settings.get("proactive", True))
         self._proactive.toggled.connect(self._on_proactive)
+
+        tone = self._section(root, "Writing tone",
+                             "How Axon writes your emails. Set it yourself, or learn it from your Sent items.")
+        self.tone_learned.connect(self._on_tone_learned)
+        self._tone_edit = QtWidgets.QPlainTextEdit(my_tone())
+        self._tone_edit.setPlaceholderText(
+            "e.g. Warm but concise. Greet by first name. Sign off with 'Best, Disan'. Avoid jargon.")
+        self._tone_edit.setMinimumHeight(90)
+        self._tone_edit.setStyleSheet(
+            f"QPlainTextEdit{{background:{SURFACE_2};color:{TEXT};border:1px solid {BORDER};"
+            f"border-radius:9px;padding:8px;{FONT_CSS}font-size:12px;}}")
+        tone.addWidget(self._tone_edit)
+        tone_row = QtWidgets.QHBoxLayout()
+        self._learn_btn = QtWidgets.QPushButton("Learn from my Sent emails")
+        self._learn_btn.setToolTip("Analyse your recent Sent items and fill in your writing style automatically.")
+        self._learn_btn.clicked.connect(self._learn_tone)
+        self._tone_status = QtWidgets.QLabel("")
+        self._tone_status.setObjectName("description")
+        self._tone_status.setWordWrap(True)
+        tone_row.addWidget(self._learn_btn)
+        tone_row.addWidget(self._tone_status, 1)
+        tone.addLayout(tone_row)
 
         brand = self._section(root, "Brand and colors", "Used in PDF reports, decks, and documents.")
         self._primary_btn = self._color_row(brand, "Primary", "primary")
@@ -206,7 +232,32 @@ class SettingsPanel(QtWidgets.QDialog):
     def _on_signin(self):
         self.signin_requested.emit()
 
+    def _learn_tone(self):
+        """Analyse the user's Sent items (off the UI thread) and fill in the tone box."""
+        self._learn_btn.setEnabled(False)
+        self._tone_status.setText("Reading your Sent items…")
+
+        def work():
+            guide = ""
+            try:
+                learn_my_tone({})   # reads Sent, derives a style guide, saves it
+                guide = my_tone()
+            except Exception:
+                guide = ""
+            self.tone_learned.emit(guide)
+        threading.Thread(target=work, daemon=True).start()
+
+    @QtCore.Slot(str)
+    def _on_tone_learned(self, guide):
+        if guide:
+            self._tone_edit.setPlainText(guide)
+            self._tone_status.setText("Learned from your Sent items — review and Save.")
+        else:
+            self._tone_status.setText("Couldn't read your Sent items (is Outlook set up?).")
+        self._learn_btn.setEnabled(True)
+
     def _save(self):
+        save_tone(self._tone_edit.toPlainText())   # persist the writing tone
         self._brand["logo"] = self._logo_edit.text().strip()
         s = load_settings()
         b = s.get("brand") or {}
