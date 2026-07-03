@@ -15,7 +15,7 @@ from axon.outlook import (
     learn_my_tone,
 )
 from axon.memory import remember, recall, forget
-from axon.knowledge import set_project, ask_documents
+from axon.knowledge import set_project, ask_documents, index_documents
 from axon.briefing import daily_briefing, inbox_triage
 from axon.meeting import meeting_notes
 from axon.triggers import add_email_trigger, list_email_triggers, remove_email_trigger, run_email_triggers
@@ -549,10 +549,16 @@ TOOLS += [
         {"folder": {"type": "string"}}, ["folder"]),
     _fn("ask_documents",
         "Answer a question using the user's documents. Searches the project folder (or a given "
-        "folder), reads .txt/.md/.csv/.docx/.pdf/.pptx/.xlsx, and answers with [filename] citations.",
+        "folder) with a semantic index (handles large folders, no file cap), reads "
+        ".txt/.md/.csv/.docx/.pdf/.pptx/.xlsx/.html/.json, and answers with [filename] citations.",
         {"question": {"type": "string"},
          "folder": {"type": "string", "description": "Folder to search (optional if a project is set)"}},
         ["question"]),
+    _fn("index_documents",
+        "Build/refresh the search index for a folder so Q&A over a large folder (hundreds/thousands "
+        "of files) is fast and complete. Run once up front; ask_documents keeps it updated after.",
+        {"folder": {"type": "string", "description": "Folder to index (optional if a project is set)"}},
+        []),
     _fn("daily_briefing",
         "Summarize the user's day from Outlook: today's calendar events, unread email (count + top "
         "senders), and open tasks. Use for 'what's my day / brief me / morning summary'.",
@@ -635,7 +641,7 @@ DISPATCH = {
 DISPATCH.update(ot.DISPATCH)
 DISPATCH.update({
     "remember": remember, "recall": recall, "forget": forget,
-    "set_project": set_project, "ask_documents": ask_documents,
+    "set_project": set_project, "ask_documents": ask_documents, "index_documents": index_documents,
     "daily_briefing": daily_briefing, "inbox_triage": inbox_triage,
     "learn_my_tone": learn_my_tone, "meeting_notes": meeting_notes,
     "add_email_trigger": add_email_trigger, "list_email_triggers": list_email_triggers,

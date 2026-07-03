@@ -74,15 +74,8 @@ def _chunks(text, path, size=1200):
     return out
 
 
-def ask_documents(args):
-    """Answer a question using the user's documents (args: question, folder?). Searches the project
-    folder if no folder is given. Returns an answer with [filename] citations + sources scanned."""
-    question = args.get("question")
-    folder = args.get("folder") or load_settings().get("project_folder")
-    if not question:
-        return _result("Provide a question.", True)
-    if not folder or not os.path.isdir(folder):
-        return _result("No project folder set — use set_project, or pass a folder.", True)
+def _keyword_top(folder, question):
+    """Fallback retrieval: read files, keyword-rank chunks (caps at ~400 files). Returns [(path, chunk)]."""
     chunks = []
     scanned = 0
     for root, _dirs, files in os.walk(folder):
@@ -90,13 +83,12 @@ def ask_documents(args):
             if os.path.splitext(fn)[1].lower() in _EXT:
                 txt = _read_text(os.path.join(root, fn))
                 if txt:
-                    # cap chunks per file so one huge file can't crowd out the others
                     chunks.extend(_chunks(txt, os.path.join(root, fn))[:30])
                     scanned += 1
         if scanned > 400:
             break
     if not chunks:
-        return _result(f"No readable documents found in {folder}.", True)
+        return []
     terms = [w for w in re.findall(r"\w+", question.lower()) if len(w) > 2]
 
     def score(c):
@@ -104,10 +96,33 @@ def ask_documents(args):
         return sum(t.count(w) for w in terms)
 
     ranked = sorted(chunks, key=score, reverse=True)
-    top = [c for c in ranked if score(c) > 0][:8] or ranked[:4]
-    context = "\n\n".join(f"[{os.path.basename(p)}]\n{c}" for p, c in top)
+    return [c for c in ranked if score(c) > 0][:8] or ranked[:4]
+
+
+def ask_documents(args):
+    """Answer a question using the user's documents (args: question, folder?). Searches the project
+    folder if no folder is given. Uses a semantic embeddings index (fast + no file cap on big folders),
+    falling back to a keyword scan. Returns an answer with [filename] citations."""
+    question = args.get("question")
+    folder = args.get("folder") or load_settings().get("project_folder")
+    if not question:
+        return _result("Provide a question.", True)
+    if not folder or not os.path.isdir(folder):
+        return _result("No project folder set — use set_project, or pass a folder.", True)
     if not os.getenv("OPENAI_API_KEY"):
         return _result("No API key available.", True)
+
+    top = []
+    try:
+        from axon.doc_index import query
+        top = query(folder, question, k=10)   # semantic, indexed, incremental
+    except Exception:
+        top = []
+    if not top:
+        top = _keyword_top(folder, question)   # fallback
+    if not top:
+        return _result(f"No readable documents found in {folder}.", True)
+    context = "\n\n".join(f"[{os.path.basename(p)}]\n{c}" for p, c in top)
     try:
         client = OpenAI()
         prompt = (
@@ -124,3 +139,21 @@ def ask_documents(args):
     footer = "\n\nSources cited: " + ", ".join(cited) if cited else \
              "\n\nSources scanned: " + ", ".join(scanned_srcs)
     return _result(ans + footer)
+
+
+def index_documents(args):
+    """Build/refresh the semantic index for a folder so Q&A over large folders is fast and complete."""
+    folder = args.get("folder") or load_settings().get("project_folder")
+    if not folder or not os.path.isdir(folder):
+        return _result("No folder to index — set a project folder or pass a folder.", True)
+    if not os.getenv("OPENAI_API_KEY"):
+        return _result("No API key available.", True)
+    try:
+        from axon.doc_index import index_stats
+        st = index_stats(folder)
+    except Exception as e:
+        return _result(f"Indexing failed: {e}", True)
+    if not st:
+        return _result(f"No readable documents found in {folder}.", True)
+    return _result(f"Indexed {st['files']} file(s) into {st['chunks']} chunk(s) from {folder}. "
+                   "Q&A now covers the whole folder and is fast on repeat questions.")
