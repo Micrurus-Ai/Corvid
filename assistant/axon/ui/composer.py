@@ -28,6 +28,7 @@ from axon.ui.theme import (ACCENT, ACCENT_2, PANEL_BG, PANEL_BG_2, SURFACE, BORD
 from axon.ui.widgets import (IconButton, ArrowButton, ActivityButton, CloseButton,
     ProfileButton, GuideButton, ModeButton, ApprovalButton, CameraButton, MicButton)
 from axon.ui.region_selector import RegionSelector
+from axon.ui.screenshot_editor import ScreenshotEditor
 from axon.ui.highlight import PanelFrame, MarkView
 from axon.ui.theme import SURFACE_2
 
@@ -149,6 +150,8 @@ class Composer(QtWidgets.QWidget):
         self.attach_thumb = QtWidgets.QLabel()
         self.attach_thumb.setFixedSize(60, 38)
         self.attach_thumb.setScaledContents(True)
+        self.attach_thumb.setCursor(QtCore.Qt.PointingHandCursor)
+        self.attach_thumb.setToolTip("Edit screenshot")
         self.attach_thumb.setStyleSheet("border:1px solid #2c2e38;border-radius:6px;background:#0d0e12;")
         _ab.addWidget(self.attach_thumb)
         self.attach_label = QtWidgets.QLabel("Screenshot attached — ask about it")
@@ -215,6 +218,7 @@ class Composer(QtWidgets.QWidget):
         self.size_grip = QtWidgets.QSizeGrip(self.card)
         self.size_grip.setFixedSize(16, 16)
 
+        self.attach_thumb.installEventFilter(self)
         for drag_source in (self.card, mark, title):
             drag_source.installEventFilter(self)
         self.prepare_for_open()
@@ -295,8 +299,7 @@ class Composer(QtWidgets.QWidget):
         os.close(fd)
         pix.save(path, "PNG")
         self._attached_image = path
-        self.attach_thumb.setPixmap(
-            pix.scaled(self.attach_thumb.size() * 2, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        self._refresh_attachment_thumb()
         self.attach_bar.show()
         self._refresh_min_height()                       # raising the minimum auto-grows the panel
         if self.height() < self.minimumHeight():
@@ -342,6 +345,23 @@ class Composer(QtWidgets.QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def _refresh_attachment_thumb(self):
+        if not self._attached_image:
+            self.attach_thumb.clear()
+            return
+        pix = QtGui.QPixmap(self._attached_image)
+        if pix.isNull():
+            return
+        self.attach_thumb.setPixmap(
+            pix.scaled(self.attach_thumb.size() * 2, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+
+    def _open_attachment_editor(self):
+        if not self._attached_image or not os.path.isfile(self._attached_image):
+            return
+        dlg = ScreenshotEditor(self._attached_image, self)
+        if dlg.exec() == QtWidgets.QDialog.Accepted:
+            self._refresh_attachment_thumb()
 
     def _refresh_min_height(self):
         """Minimum height that always fits the header, input and the bottom control row, plus any
@@ -521,6 +541,9 @@ class Composer(QtWidgets.QWidget):
     def eventFilter(self, obj, event):
         event_type = event.type()
         if event_type == QtCore.QEvent.MouseButtonPress and event.button() == QtCore.Qt.LeftButton:
+            if obj is getattr(self, "attach_thumb", None):
+                self._open_attachment_editor()
+                return True
             if obj is self.card and event.position().y() > 62:
                 return False
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
