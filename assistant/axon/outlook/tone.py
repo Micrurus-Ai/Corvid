@@ -1,12 +1,24 @@
 """Learn the user's writing tone from their Sent items, save a reusable style guide, and expose it
 so both the dot's drafting and the Outlook add-in's Reply sound like the user."""
 import os
+import re
 
 from openai import OpenAI
 
 from axon.config import IS_WINDOWS, MODEL
 from axon.util import _result
 from axon.outlook._base import _run_outlook_ps
+
+
+def _plain(text):
+    """Strip Markdown markers (**bold**, *italic*, `code`, # headings) so the tone reads as clean
+    plain text in the editable Settings box and when injected into draft prompts."""
+    if not text:
+        return text
+    t = re.sub(r"\*+", "", text)                    # drop * and ** emphasis
+    t = re.sub(r"`+", "", t)                         # drop code backticks
+    t = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", t)      # drop heading hashes
+    return t.strip()
 
 
 def _tone_path():
@@ -59,15 +71,17 @@ def learn_my_tone(args=None):
         "GUIDE another writer could follow to sound exactly like this person when drafting their "
         "emails. Describe: typical greeting, sign-off, formality/warmth, sentence length, whether "
         "they use bullet points or emojis, and any signature phrases. If you see Dutch, French, or "
-        "English, add a one-line note per language. Output plain-text bullet points, under 200 words. "
-        "Do NOT summarise the email contents.\n\n" + samples
+        "English, add a one-line note per language. Under 200 words. Do NOT summarise the email "
+        "contents.\n\n"
+        "Format: plain text with simple '- ' bullets. Do NOT use Markdown and do NOT wrap any words "
+        "in asterisks (no * or **). Write labels as 'Greeting:' not '**Greeting**:'.\n\n" + samples
     )
     try:
         from axon.llm import text_llm
         client, model = text_llm()
         resp = client.chat.completions.create(
             model=model, messages=[{"role": "user", "content": prompt}], temperature=0.2)
-        guide = (resp.choices[0].message.content or "").strip()
+        guide = _plain((resp.choices[0].message.content or "").strip())
     except Exception as e:
         return _result("Couldn't derive your tone: " + str(e), True)
     if not guide:
@@ -88,7 +102,7 @@ def my_tone():
     """Return the saved style guide (or '' if none yet) for injecting into draft prompts."""
     try:
         with open(_tone_path(), encoding="utf-8") as f:
-            return f.read().strip()
+            return _plain(f.read().strip())
     except Exception:
         return ""
 
