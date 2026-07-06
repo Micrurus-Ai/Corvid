@@ -54,7 +54,7 @@
 
   <div class="kicker">System Overview · for IT</div>
   <h1><b>Axon</b> intelligence: how the system fits together</h1>
-  <p class="sub">Two apps, one AI engine. Everything runs on the user's PC. The engine uses a set of <b style="color:var(--ink)">hands</b> to actually do the work: browse the web, move files, run apps, and drive Outlook &amp; Office through Windows' COM interface. The only thing that ever leaves the device is the text of a request, sent over encrypted HTTPS to the AI models.</p>
+  <p class="sub">Two apps, one AI engine. Everything runs on the user's PC. The engine uses a set of <b style="color:var(--ink)">hands</b> to actually do the work: browse the web, move files, run apps, and drive Outlook &amp; Office through Windows' COM interface. To understand a task, the engine sends the AI the content it needs (for example the email it is summarizing or filing), over encrypted HTTPS. It does not upload your other files, passwords, or browser session.</p>
 
   <div class="canvas">
   <svg viewBox="0 0 1220 772" role="img" aria-label="Axon system overview for IT">
@@ -78,7 +78,7 @@
     <path class="edge" d="M150,208 L150,262" marker-end="url(#arw)"/>
     <path class="edge" d="M320,308 L292,308" marker-end="url(#arw)" marker-start="url(#arwR)"/>
     <path class="edge" d="M760,308 L946,308" marker-end="url(#arw)"/>
-    <text class="el" x="853" y="299" text-anchor="middle">request text only</text>
+    <text class="el" x="853" y="299" text-anchor="middle">request + email/doc content</text>
     <path class="edge" d="M540,358 L540,430"/>
     <path class="edge" d="M170,430 L752,430"/>
     <path class="edge" d="M170,430 L170,496" marker-end="url(#arw)"/>
@@ -164,14 +164,14 @@
 
     <!-- outbound / data-handling note -->
     <text class="nsm" x="950" y="426" style="fill:var(--faint)">Outbound only: HTTPS / 443, no inbound.</text>
-    <text class="nsm" x="950" y="443" style="fill:var(--faint)">On the providers' API terms, prompts</text>
-    <text class="nsm" x="950" y="460" style="fill:var(--faint)">are not used to train the models.</text>
+    <text class="nsm" x="950" y="443" style="fill:var(--faint)">On the providers' API terms, the content</text>
+    <text class="nsm" x="950" y="460" style="fill:var(--faint)">sent is not used to train the models.</text>
   </svg>
   </div>
 
   <div class="notes">
     <div class="note"><h4>Deployment</h4><p>Download the installer from the <b>team SharePoint folder</b> and run it. Installs per-user and works immediately.</p></div>
-    <div class="note"><h4>Data boundary</h4><p>Only the <b>request text</b> leaves the PC (encrypted HTTPS). Files, emails &amp; the browser session stay local.</p></div>
+    <div class="note"><h4>Data boundary</h4><p>The <b>content of the task</b> is sent to the AI over HTTPS (e.g. the email being filed or summarized). Axon does <b>not</b> bulk-upload files, or send passwords or the browser session.</p></div>
     <div class="note"><h4>Permissions</h4><p>The hands run with the <b>signed-in user's own permissions</b>: no elevation, nothing the user couldn't already do.</p></div>
   </div>
 

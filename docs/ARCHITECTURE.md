@@ -4,8 +4,9 @@
 
 Two apps, one AI engine. Everything runs on the user's PC. The engine uses a set of **hands** to
 actually do the work: browse the web, move files, run apps, and drive Outlook & Office through
-Windows' COM interface. The only thing that ever leaves the device is the text of a request, sent
-over encrypted HTTPS to the AI models.
+Windows' COM interface. To understand a task, the engine sends the AI the content it needs (for
+example the email it is summarizing or filing), over encrypted HTTPS. It does not upload your other
+files, passwords, or browser session.
 
 ![Axon system architecture](architecture.png)
 
@@ -37,14 +38,15 @@ supported interface. The Outlook Add-in itself loads into Outlook as a COM add-i
 **Cloud (HTTPS)**
 
 - **AI models** — a primary provider with an automatic backup. Reached over **HTTPS / 443, outbound
-  only, with no inbound connections.** On the providers' API terms, prompts are not used to train the
-  models.
+  only, with no inbound connections.** On the providers' API terms, the content sent is not used to
+  train the models.
 
 ## Notes for IT
 
 - **Deployment** — Download the installer from the team SharePoint folder and run it. Installs per-user
   and works immediately.
-- **Data boundary** — Only the request text leaves the PC (encrypted HTTPS). Files, emails, and the
-  browser session stay local.
+- **Data boundary** — The content of the task is sent to the AI over HTTPS (for example, the email
+  being filed or summarized). Axon does **not** bulk-upload files, or send passwords or the browser
+  session.
 - **Permissions** — The hands run with the signed-in user's own permissions: no elevation, nothing the
   user couldn't already do.
