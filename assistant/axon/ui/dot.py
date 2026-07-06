@@ -527,18 +527,9 @@ class FloatingDot(QtWidgets.QWidget):
         threading.Thread(target=work, daemon=True).start()
 
     def _on_inbox_opened(self, eid, subject, sender):
-        # Suggest folders off the UI thread (it reads Outlook + calls the model), then show the popup.
-        def work():
-            try:
-                data = agent.suggest_folders(eid)
-            except Exception:
-                data = None
-            if data:
-                data["eid"] = eid
-                data["subject"] = data.get("subject") or subject
-                data["sender"] = data.get("sender") or sender
-                self.inbox_suggestions.emit(data)
-        threading.Thread(target=work, daemon=True).start()
+        # Disabled: filing an email is done via the Outlook add-in's right-click "Move with Axon".
+        # (The dot's move popup was removed to avoid two Move UIs.)
+        return
 
     @QtCore.Slot(object)
     def _show_folder_popup(self, data):

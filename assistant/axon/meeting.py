@@ -74,9 +74,10 @@ def meeting_notes(args):
         "Transcript:\n" + text
     )
     try:
-        client = OpenAI()
+        from axon.llm import text_llm
+        client, model = text_llm()
         resp = client.chat.completions.create(
-            model=MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.3)
+            model=model, messages=[{"role": "user", "content": prompt}], temperature=0.3)
         notes = (resp.choices[0].message.content or "").strip()
     except Exception as e:
         return _result("Couldn't produce the notes: " + str(e), True)

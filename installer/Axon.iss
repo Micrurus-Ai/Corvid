@@ -11,6 +11,11 @@
 #define AppExe      "AxonIntelligence.exe"
 #define AddinClsid  "{{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}}"
 #define AddinProgId "Axon.OutlookAddin"
+; Mistral key for the add-in's config.json — passed at build time (ISCC /DMistralKey=...); empty by
+; default so the committed script holds no secret. build.ps1 reads it from assistant\.env.
+#ifndef MistralKey
+  #define MistralKey ""
+#endif
 ; Source folders (relative to this .iss in installer\)
 #define DistDir   "..\assistant\dist\AxonIntelligence"
 #define AddinDir  "..\outlook_addin"
@@ -101,10 +106,32 @@ begin
   RegWriteDWordValue(HKCU, addins, 'LoadBehavior', 3);
 end;
 
+{ Point the Outlook add-in at Mistral out-of-the-box (only if a key was baked at build time and the
+  user has no config yet, so we never clobber a customised config). }
+procedure WriteAddinConfig;
+var
+  dir, path, json, key: String;
+begin
+  key := '{#MistralKey}';
+  if key = '' then exit;
+  dir := ExpandConstant('{userappdata}\AxonOutlook');
+  ForceDirectories(dir);
+  path := dir + '\config.json';
+  if FileExists(path) then exit;
+  { Primary = Mistral; backup = OpenAI. The backup key is left blank so the add-in reuses the OpenAI
+    key baked into the co-located dot .env (BakedKey) — no need to duplicate the secret here. }
+  json := '{"api_base": "https://api.mistral.ai/v1", "api_key": "' + key + '", "model": "mistral-medium-latest",' +
+          ' "backup_api_base": "https://api.openai.com/v1", "backup_api_key": "", "backup_model": "gpt-4o"}';
+  SaveStringToFile(path, json, False);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
+  begin
     RegisterAddin;
+    WriteAddinConfig;
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

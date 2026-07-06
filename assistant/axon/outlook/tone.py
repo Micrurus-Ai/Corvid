@@ -49,7 +49,7 @@ def learn_my_tone(args=None):
     if not IS_WINDOWS:
         return _result("Learning your tone needs the Windows Outlook app.", True)
     if not os.getenv("OPENAI_API_KEY"):
-        return _result("No OpenAI key configured, so I can't analyse your writing.", True)
+        return _result("Axon isn't set up with an API key yet, so I can't analyse your writing.", True)
     out = _run_outlook_ps(_SENT_PS, {}, show=False)
     if not out or out.startswith("OL_ERROR") or "=====EMAIL=====" not in out:
         return _result("Couldn't read your Sent items: " + (out or "no output"), True)
@@ -63,9 +63,10 @@ def learn_my_tone(args=None):
         "Do NOT summarise the email contents.\n\n" + samples
     )
     try:
-        client = OpenAI()
+        from axon.llm import text_llm
+        client, model = text_llm()
         resp = client.chat.completions.create(
-            model=MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.2)
+            model=model, messages=[{"role": "user", "content": prompt}], temperature=0.2)
         guide = (resp.choices[0].message.content or "").strip()
     except Exception as e:
         return _result("Couldn't derive your tone: " + str(e), True)

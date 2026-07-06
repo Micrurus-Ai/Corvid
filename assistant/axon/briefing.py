@@ -156,9 +156,10 @@ def inbox_triage(args):
         "a priority (High/Medium/Low), a one-line summary, and a short suggested action. Be concise.\n\n"
         + items + "\n\nReturn a clean numbered list, most important first.")
     try:
-        client = OpenAI()
+        from axon.llm import text_llm
+        client, model = text_llm()
         r = client.chat.completions.create(
-            model=MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.2)
+            model=model, messages=[{"role": "user", "content": prompt}], temperature=0.2)
         return _result((r.choices[0].message.content or "").strip() or "(no triage produced)")
     except Exception as e:
         return _result(f"Triage failed: {e}", True)

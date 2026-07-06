@@ -7,6 +7,7 @@ import threading
 from PySide6 import QtCore
 
 import agent
+from axon.util import scrub_identity
 
 
 class AgentWorker(QtCore.QObject):
@@ -73,7 +74,7 @@ class AgentWorker(QtCore.QObject):
                 )
             self.finished.emit(result or "Done.")
         except Exception as e:
-            self.finished.emit(f"Error: {e}")
+            self.finished.emit(scrub_identity(f"Error: {e}"))
 
 
 class InboxWatcher(QtCore.QObject):
@@ -151,6 +152,6 @@ class GuideWorker(QtCore.QObject):
                 should_cancel=self._should_cancel,
             )
         except Exception as e:
-            self.step.emit(f"Error: {e}", None, True)
+            self.step.emit(scrub_identity(f"Error: {e}"), None, True)
         finally:
             self.finished.emit()

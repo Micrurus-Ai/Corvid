@@ -26,6 +26,13 @@ for _base in (getattr(sys, "_MEIPASS", None), _exe_dir, os.path.join(_exe_dir, "
 
 MODEL = os.getenv("ASSISTANT_MODEL", "gpt-4o")
 MAX_STEPS = int(os.getenv("ASSISTANT_MAX_STEPS", "30"))
+
+# Provider split: pure-text tasks (chat, tone, notes, doc Q&A, triage, drafts) route to Mistral when
+# a key is set — cheaper + EU data residency. Vision (agent/guide), voice, image-gen and embeddings
+# stay on OpenAI. See axon/llm.text_llm().
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
+MISTRAL_BASE = os.getenv("MISTRAL_BASE", "https://api.mistral.ai/v1")
+TEXT_MODEL = os.getenv("ASSISTANT_TEXT_MODEL", "mistral-medium-latest")
 BROWSE_MODEL = os.getenv("ASSISTANT_BROWSE_MODEL", "gpt-4o")
 BROWSE_FALLBACK_MODEL = os.getenv("ASSISTANT_BROWSE_FALLBACK_MODEL", "gpt-4o-mini")
 # Guide mode does vision grounding on a grid; a fast vision model keeps it responsive.

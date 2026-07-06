@@ -14,6 +14,7 @@ POPUP_TEXT = "#191611"
 POPUP_MUTED = "#70685D"
 POPUP_PRIMARY = "#111111"
 POPUP_PRIMARY_TEXT = "#FFF9F0"
+POPUP_FONT_CSS = "font-family:'Segoe UI', Arial, sans-serif;"
 
 
 def _resolve_preset(i):
@@ -172,56 +173,113 @@ class FolderPickPopup(QtWidgets.QWidget):
         self.setWindowFlags(
             QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.Tool)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-        self.resize(440, 250)
+        self.resize(520, 600)
         self._eid = None
+        self._folders = []
+
         self.card = PanelFrame(self, fill_color=POPUP_BG, border_color=POPUP_BORDER)
         self._lay = QtWidgets.QVBoxLayout(self.card)
-        self._lay.setContentsMargins(20, 18, 20, 16)
-        self._lay.setSpacing(10)
+        self._lay.setContentsMargins(24, 22, 24, 20)
+        self._lay.setSpacing(7)
 
-        title = QtWidgets.QLabel("File this email?")
-        title.setStyleSheet(f"color:{POPUP_TEXT};{FONT_CSS}font-size:15px;font-weight:700;")
+        title = QtWidgets.QLabel("Move this email to a folder")
+        title.setStyleSheet(f"color:{POPUP_TEXT};{POPUP_FONT_CSS}font-size:22px;font-weight:800;")
         self._lay.addWidget(title)
+
         self.info = QtWidgets.QLabel("")
         self.info.setWordWrap(True)
-        self.info.setStyleSheet(f"color:{POPUP_MUTED};{FONT_CSS}font-size:12px;")
+        self.info.setStyleSheet(f"color:{POPUP_MUTED};{POPUP_FONT_CSS}font-size:14px;")
         self._lay.addWidget(self.info)
 
+        self.suggestion_area = QtWidgets.QWidget()
+        self.suggestion_area.setMinimumHeight(176)
+        suggestion_lay = QtWidgets.QVBoxLayout(self.suggestion_area)
+        suggestion_lay.setContentsMargins(0, 2, 0, 0)
+        suggestion_lay.setSpacing(5)
+        suggestion_lay.addWidget(self._section_label("Suggested folders"))
         self._sugg_box = QtWidgets.QVBoxLayout()
-        self._sugg_box.setSpacing(6)
-        self._lay.addLayout(self._sugg_box)
+        self._sugg_box.setSpacing(5)
+        suggestion_lay.addLayout(self._sugg_box)
+        suggestion_lay.addStretch(1)
+        self._lay.addWidget(self.suggestion_area)
 
-        row = QtWidgets.QHBoxLayout()
-        row.setSpacing(8)
-        self.other = QtWidgets.QComboBox()
-        self.other.setStyleSheet(
-            f"QComboBox{{background:{POPUP_SURFACE};color:{POPUP_TEXT};border:1px solid {POPUP_BORDER};border-radius:9px;"
-            f"padding:6px 10px;{FONT_CSS}font-size:12px;}}"
-            "QComboBox::drop-down{border:0;width:18px;}"
-            f"QComboBox QAbstractItemView{{background:{POPUP_SURFACE};color:{POPUP_TEXT};"
-            f"selection-background-color:{POPUP_SURFACE_2};selection-color:{POPUP_TEXT};}}")
-        row.addWidget(self.other, 1)
-        self.move_other = QtWidgets.QPushButton("Move")
-        self.move_other.setCursor(QtCore.Qt.PointingHandCursor)
-        self.move_other.setStyleSheet(
-            f"QPushButton{{background:{POPUP_PRIMARY};color:{POPUP_PRIMARY_TEXT};border:1px solid {POPUP_PRIMARY};"
-            f"border-radius:9px;padding:7px 14px;{FONT_CSS}font-size:12px;font-weight:700;}}"
-            "QPushButton:hover{background:#2a2721;}")
-        self.move_other.clicked.connect(self._move_other)
-        row.addWidget(self.move_other)
-        self._lay.addLayout(row)
+        self._lay.addWidget(self._section_label("Or create a new folder"))
+        create_row = QtWidgets.QHBoxLayout()
+        create_row.setSpacing(8)
+        self.new_folder = QtWidgets.QLineEdit()
+        self.new_folder.setStyleSheet(self._field_style())
+        create_row.addWidget(self.new_folder, 1)
+        create = self._primary_button("Create & Move", min_width=148)
+        create.clicked.connect(self._create_and_move)
+        create_row.addWidget(create)
+        self._lay.addLayout(create_row)
 
-        keep_row = QtWidgets.QHBoxLayout()
-        keep_row.addStretch(1)
-        keep = QtWidgets.QPushButton("Keep in Inbox")
-        keep.setCursor(QtCore.Qt.PointingHandCursor)
-        keep.setStyleSheet(
-            f"QPushButton{{background:transparent;color:{POPUP_MUTED};border:none;{FONT_CSS}font-size:12px;}}"
-            f"QPushButton:hover{{color:{POPUP_TEXT};}}")
+        self._lay.addWidget(self._section_label("Or pick an existing folder"))
+        self.search = QtWidgets.QLineEdit()
+        self.search.setStyleSheet(self._field_style())
+        self.search.textChanged.connect(self._filter_folders)
+        self._lay.addWidget(self.search)
+
+        self.folder_list = QtWidgets.QListWidget()
+        self.folder_list.setObjectName("FolderPickList")
+        self.folder_list.setUniformItemSizes(False)
+        self.folder_list.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        self.folder_list.setStyleSheet(
+            f"QListWidget#FolderPickList{{background:{POPUP_SURFACE};color:{POPUP_TEXT};"
+            f"border:1px solid {POPUP_BORDER};border-radius:0;outline:0;{POPUP_FONT_CSS}font-size:13px;}}"
+            "QListWidget#FolderPickList::item{padding:0;border:0;}"
+            f"QListWidget#FolderPickList::item:selected{{background:#E7E4EE;color:{POPUP_TEXT};}}"
+            f"QListWidget#FolderPickList::item:hover{{background:{POPUP_SURFACE_2};}}")
+        self.folder_list.itemDoubleClicked.connect(lambda _item: self._move_selected())
+        self.folder_list.currentItemChanged.connect(lambda _current, _previous: self._sync_folder_rows())
+        self._lay.addWidget(self.folder_list, 1)
+
+        footer = QtWidgets.QHBoxLayout()
+        footer.setContentsMargins(0, 10, 0, 0)
+        footer.setSpacing(8)
+        footer.addStretch(1)
+        self.move_other = self._primary_button("Move", min_width=104)
+        self.move_other.clicked.connect(self._move_selected)
+        footer.addWidget(self.move_other)
+        keep = self._secondary_button("Keep in Inbox", min_width=130)
         keep.clicked.connect(self._keep)
-        keep_row.addWidget(keep)
-        self._lay.addLayout(keep_row)
+        footer.addWidget(keep)
+        self._lay.addLayout(footer)
         self._reposition()
+
+    def _section_label(self, text):
+        label = QtWidgets.QLabel(text.upper())
+        label.setStyleSheet(
+            f"color:{POPUP_MUTED};{POPUP_FONT_CSS}font-size:12px;font-weight:800;letter-spacing:0px;")
+        return label
+
+    def _field_style(self):
+        return (
+            f"QLineEdit{{background:{POPUP_SURFACE};color:{POPUP_TEXT};border:1px solid {POPUP_BORDER};"
+            f"border-radius:8px;padding:8px 12px;{POPUP_FONT_CSS}font-size:13px;"
+            f"selection-background-color:{POPUP_SURFACE_2};}}"
+            "QLineEdit:focus{border:1px solid #BBAA94;background:#FFFDF8;}")
+
+    def _primary_button(self, text, min_width=0):
+        button = QtWidgets.QPushButton(text)
+        button.setMinimumWidth(min_width)
+        button.setCursor(QtCore.Qt.PointingHandCursor)
+        button.setStyleSheet(
+            f"QPushButton{{background:{POPUP_PRIMARY};color:{POPUP_PRIMARY_TEXT};border:1px solid {POPUP_PRIMARY};"
+            f"border-radius:0;padding:8px 16px;{POPUP_FONT_CSS}font-size:14px;font-weight:800;}}"
+            "QPushButton:hover{background:#302D28;}"
+            "QPushButton:pressed{background:#050505;}")
+        return button
+
+    def _secondary_button(self, text, min_width=0):
+        button = QtWidgets.QPushButton(text)
+        button.setMinimumWidth(min_width)
+        button.setCursor(QtCore.Qt.PointingHandCursor)
+        button.setStyleSheet(
+            f"QPushButton{{background:{POPUP_SURFACE};color:{POPUP_TEXT};border:1px solid {POPUP_BORDER};"
+            f"border-radius:0;padding:8px 16px;{POPUP_FONT_CSS}font-size:14px;font-weight:500;}}"
+            f"QPushButton:hover{{background:{POPUP_SURFACE_2};}}")
+        return button
 
     def _reposition(self):
         self.card.setGeometry(8, 8, self.width() - 16, self.height() - 16)
@@ -237,24 +295,75 @@ class FolderPickPopup(QtWidgets.QWidget):
             if w:
                 w.deleteLater()
 
+    def _folder_label(self, folder):
+        name = (folder or "").replace("\\", "/").rstrip("/").split("/")[-1].strip()
+        return name or folder or ""
+
+    def _make_folder_item(self, folder):
+        item = QtWidgets.QListWidgetItem()
+        item.setData(QtCore.Qt.UserRole, folder)
+        item.setSizeHint(QtCore.QSize(0, 48))
+
+        row = QtWidgets.QWidget()
+        row.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+        row.setProperty("folderSelected", False)
+        row.setStyleSheet(
+            "QWidget{background:transparent;}"
+            f"QWidget[folderSelected='true']{{background:#E7E4EE;}}")
+        lay = QtWidgets.QVBoxLayout(row)
+        lay.setContentsMargins(14, 5, 14, 5)
+        lay.setSpacing(0)
+        name = QtWidgets.QLabel(self._folder_label(folder))
+        name.setStyleSheet(f"color:{POPUP_TEXT};{POPUP_FONT_CSS}font-size:16px;font-weight:800;")
+        path = QtWidgets.QLabel(folder)
+        path.setStyleSheet(f"color:{POPUP_MUTED};{POPUP_FONT_CSS}font-size:12px;")
+        lay.addWidget(name)
+        lay.addWidget(path)
+        return item, row
+
+    def _filter_folders(self):
+        query = self.search.text().strip().lower()
+        self.folder_list.clear()
+        for folder in self._folders:
+            if not query or query in folder.lower():
+                item, row = self._make_folder_item(folder)
+                self.folder_list.addItem(item)
+                self.folder_list.setItemWidget(item, row)
+        if self.folder_list.count():
+            self.folder_list.setCurrentRow(0)
+        self._sync_folder_rows()
+
+    def _sync_folder_rows(self):
+        current = self.folder_list.currentItem()
+        for i in range(self.folder_list.count()):
+            item = self.folder_list.item(i)
+            row = self.folder_list.itemWidget(item)
+            if not row:
+                continue
+            selected = item is current
+            row.setProperty("folderSelected", selected)
+            row.style().unpolish(row)
+            row.style().polish(row)
+
     def present(self, eid, subject, sender, suggestions, folders, screen=None):
         self._eid = eid
         subj = (subject or "(no subject)").strip()
-        self.info.setText(f"<b>{subj}</b><br>from {sender or 'unknown'}")
+        self.info.setText(f"<span style='font-weight:600'>{subj}</span><br>from {sender or 'unknown'}")
         self._clear_suggestions()
         for name in (suggestions or [])[:3]:
-            b = QtWidgets.QPushButton("→  " + name)
+            b = QtWidgets.QPushButton("->  " + self._folder_label(name))
             b.setCursor(QtCore.Qt.PointingHandCursor)
             b.setStyleSheet(
-                f"QPushButton{{background:{POPUP_SURFACE};color:{POPUP_TEXT};border:1px solid {POPUP_BORDER};border-radius:9px;"
-                f"padding:8px 12px;text-align:left;{FONT_CSS}font-size:13px;font-weight:700;}}"
-                f"QPushButton:hover{{background:{POPUP_SURFACE_2};}}")
+                f"QPushButton{{background:#56545C;color:{POPUP_PRIMARY_TEXT};border:0;border-radius:0;"
+                f"padding:7px 18px;text-align:left;{POPUP_FONT_CSS}font-size:14px;font-weight:800;}}"
+                "QPushButton:hover{background:#44424A;}")
             b.clicked.connect(lambda _=False, n=name: self._pick(n))
             self._sugg_box.addWidget(b)
-        self.other.clear()
-        self.other.addItems(folders or [])
-        self.adjustSize()
-        self.resize(max(440, self.width()), max(250, self.sizeHint().height()))
+        self.new_folder.clear()
+        self.search.clear()
+        self._folders = list(folders or [])
+        self._filter_folders()
+        self.resize(520, 600)
         geo = (screen.availableGeometry() if screen is not None
                else QtWidgets.QApplication.primaryScreen().availableGeometry())
         self.move(geo.right() - self.width() - 40, geo.top() + 80)
@@ -269,7 +378,16 @@ class FolderPickPopup(QtWidgets.QWidget):
             self.chosen.emit(eid, folder)
 
     def _move_other(self):
-        folder = self.other.currentText().strip()
+        self._move_selected()
+
+    def _create_and_move(self):
+        folder = self.new_folder.text().strip()
+        if folder:
+            self._pick(folder)
+
+    def _move_selected(self):
+        item = self.folder_list.currentItem()
+        folder = item.data(QtCore.Qt.UserRole).strip() if item else ""
         if folder:
             self._pick(folder)
 

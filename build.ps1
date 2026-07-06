@@ -61,7 +61,14 @@ $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
           "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
           "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { throw "Inno Setup not found. Install it: winget install JRSoftware.InnoSetup" }
-& $iscc (Join-Path $root "installer\Axon.iss") | Out-Null
+# Pass the Mistral key (from assistant\.env) so the installer sets the add-in's config.json to Mistral.
+$mistral = ""
+$envFile = Join-Path $asst ".env"
+if (Test-Path $envFile) {
+    $ml = Select-String -Path $envFile -Pattern '^\s*MISTRAL_API_KEY\s*=\s*(.+)$' | Select-Object -First 1
+    if ($ml) { $mistral = $ml.Matches[0].Groups[1].Value.Trim() }
+}
+& $iscc "/DMistralKey=$mistral" (Join-Path $root "installer\Axon.iss") | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Installer compile failed." }
 
 $setup = Join-Path $root "installer\Output\Axon-Setup.exe"

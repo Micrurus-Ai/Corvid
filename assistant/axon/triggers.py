@@ -99,9 +99,10 @@ def _draft_reply_text(subject, sender, body):
         "(no subject, no quoted original)." + toneline +
         f"\n\nFrom: {sender}\nSubject: {subject}\n\n{body[:2000]}")
     try:
-        client = OpenAI()
+        from axon.llm import text_llm
+        client, model = text_llm()
         r = client.chat.completions.create(
-            model=MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.4)
+            model=model, messages=[{"role": "user", "content": prompt}], temperature=0.4)
         return (r.choices[0].message.content or "").strip()
     except Exception:
         return ""

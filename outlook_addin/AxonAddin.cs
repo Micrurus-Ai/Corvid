@@ -267,15 +267,24 @@ namespace Axon.OutlookAddin
         }
 
         private static string _apiBase, _apiKey, _model;
+        private static string _backupBase, _backupKey, _backupModel;
 
-        // Config from %APPDATA%\AxonOutlook\config.json: { api_base, api_key, model }. If no api_key
-        // is set there, fall back to the key baked into a co-located Axon app (.env) — that's the
-        // bundled-with-the-dot case. On-site deployments point api_base at their own model server.
+        // Config from %APPDATA%\AxonOutlook\config.json:
+        //   { api_base, api_key, model, backup_api_base?, backup_api_key?, backup_model? }
+        // The primary provider (Mistral in the bundled deployment) is tried first; if it errors or is
+        // down, the BACKUP provider (OpenAI by default) transparently takes over so the add-in keeps
+        // working. If no api_key/backup_api_key is set, we fall back to the OpenAI key baked into a
+        // co-located Axon app (.env) — that's the bundled-with-the-dot case. On-site deployments point
+        // api_base at their own model server.
         private void LoadConfig()
         {
             _apiBase = "https://api.openai.com/v1";
             _apiKey = "";
             _model = "gpt-4o";   // better at matching email topic -> folder than mini (config can override)
+            // Backup defaults to OpenAI cloud; used only when the primary call fails.
+            _backupBase = "https://api.openai.com/v1";
+            _backupKey = "";
+            _backupModel = "gpt-4o";
             try
             {
                 string p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -287,10 +296,15 @@ namespace Axon.OutlookAddin
                     if (d.ContainsKey("api_base") && d["api_base"] != null) _apiBase = d["api_base"].ToString().TrimEnd('/');
                     if (d.ContainsKey("api_key") && d["api_key"] != null) _apiKey = d["api_key"].ToString();
                     if (d.ContainsKey("model") && d["model"] != null) _model = d["model"].ToString();
+                    if (d.ContainsKey("backup_api_base") && d["backup_api_base"] != null) _backupBase = d["backup_api_base"].ToString().TrimEnd('/');
+                    if (d.ContainsKey("backup_api_key") && d["backup_api_key"] != null) _backupKey = d["backup_api_key"].ToString();
+                    if (d.ContainsKey("backup_model") && d["backup_model"] != null) _backupModel = d["backup_model"].ToString();
                 }
             }
             catch { }
-            if (string.IsNullOrEmpty(_apiKey)) _apiKey = BakedKey();
+            string baked = BakedKey();   // OpenAI key from a co-located Axon .env (bundled deployment)
+            if (string.IsNullOrEmpty(_apiKey)) _apiKey = baked;
+            if (string.IsNullOrEmpty(_backupKey)) _backupKey = baked;   // OpenAI is the default backup
         }
 
         // Read OPENAI_API_KEY from a co-located Axon app's .env (bundled-with-the-dot deployment).
@@ -315,17 +329,49 @@ namespace Axon.OutlookAddin
             return "";
         }
 
-        // One OpenAI-compatible chat call -> the assistant's text (or null). Shared by suggest,
-        // summarize, and reply. Provider/model/base/key come from LoadConfig().
+        // One chat completion -> the assistant's text (or null). Tries the primary provider (Mistral in
+        // the bundled deployment); if it errors, times out, or is down, it transparently retries on the
+        // backup provider (OpenAI) so the feature keeps working. Shared by suggest, summarize, and reply.
         private string ModelComplete(string prompt, double temperature)
+        {
+            LoadConfig();
+            string text = CallChat(_apiBase, _apiKey, _model, prompt, temperature);
+            if (string.IsNullOrEmpty(text))
+            {
+                // Primary failed / unreachable / empty -> fall over to the backup provider, but only if
+                // it is usable and actually a different endpoint (no point re-calling the same one).
+                bool backupUsable = !string.IsNullOrEmpty(_backupKey);
+                bool backupDifferent = !(string.Equals(_backupBase, _apiBase, StringComparison.OrdinalIgnoreCase)
+                                         && string.Equals(_backupModel, _model, StringComparison.OrdinalIgnoreCase));
+                if (backupUsable && backupDifferent)
+                    text = CallChat(_backupBase, _backupKey, _backupModel, prompt, temperature);
+            }
+            return ScrubIdentity(text);
+        }
+
+        // Axon must never reveal the underlying model/provider in any output. Strip brand names the
+        // model might emit (OpenAI, ChatGPT, GPT-4o, Mistral, ...) from summaries, replies, and drafts.
+        private static string ScrubIdentity(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            var ic = System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\bchat\s?gpt\b", "Axon", ic);
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\bopen\s?ai\b", "Axon", ic);
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\bmistral(\s?ai)?\b", "Axon", ic);
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\bgpt[-\s]?[\w.]+", "Axon", ic);
+            return s;
+        }
+
+        // One OpenAI-compatible chat call against a specific provider -> the assistant's text (or null
+        // on any error/non-success). Kept provider-agnostic so ModelComplete can call primary then backup.
+        private string CallChat(string apiBase, string apiKey, string model, string prompt, double temperature)
         {
             try
             {
-                LoadConfig();
                 var js = new System.Web.Script.Serialization.JavaScriptSerializer();
                 var reqObj = new System.Collections.Generic.Dictionary<string, object>
                 {
-                    { "model", _model },
+                    { "model", model },
                     { "temperature", temperature },
                     { "stream", false },
                     { "messages", new object[] { new System.Collections.Generic.Dictionary<string, object> { { "role", "user" }, { "content", prompt } } } }
@@ -333,11 +379,11 @@ namespace Axon.OutlookAddin
                 System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
                 using (var http = new System.Net.Http.HttpClient())
                 {
-                    http.Timeout = TimeSpan.FromSeconds(90);
-                    if (!string.IsNullOrEmpty(_apiKey))
-                        http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + _apiKey);
+                    http.Timeout = TimeSpan.FromSeconds(60);   // fail over to the backup reasonably fast
+                    if (!string.IsNullOrEmpty(apiKey))
+                        http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + apiKey);
                     var content = new System.Net.Http.StringContent(js.Serialize(reqObj), System.Text.Encoding.UTF8, "application/json");
-                    var resp = http.PostAsync(_apiBase + "/chat/completions", content).Result;
+                    var resp = http.PostAsync(apiBase + "/chat/completions", content).Result;
                     if (!resp.IsSuccessStatusCode) return null;
                     var d = (System.Collections.Generic.Dictionary<string, object>)js.DeserializeObject(resp.Content.ReadAsStringAsync().Result);
                     var choices = d.ContainsKey("choices") ? d["choices"] as object[] : null;
@@ -412,6 +458,8 @@ namespace Axon.OutlookAddin
             catch (Exception ex) { Ui.Notify("Couldn't create folder: " + ex.Message, "Axon intelligence"); return null; }
         }
 
+        private string _archiveBaseDir;
+
         public void OnDownload(object control)
         {
             try
@@ -419,19 +467,226 @@ namespace Axon.OutlookAddin
                 object m = GetSelectedMail();
                 if (m == null) { Ui.Notify("Select an email first."); return; }
                 dynamic mail = m;
-                var folders = LoadDownloadFolders();
                 string subject = ""; try { subject = (string)mail.Subject; } catch { }
-                var dlg = new DownloadPicker(subject, folders);
+                var cfg = ReadArchiveCfg();
+                if (!cfg.Ready)
+                {
+                    // No archive configured -> the simple 'pick a save folder' picker.
+                    var folders = LoadDownloadFolders();
+                    var dlg0 = new DownloadPicker(subject, folders);
+                    try
+                    {
+                        var r0 = dlg0.ShowDialog();
+                        SaveDownloadFolders(dlg0.Folders);
+                        if (r0 == DialogResult.OK && !string.IsNullOrEmpty(dlg0.Chosen))
+                            SaveEmail(mail, dlg0.Chosen, subject);
+                    }
+                    finally { dlg0.Dispose(); }
+                    return;
+                }
+
+                // Archive flow: show the picker immediately, extract entities + suggest on a thread.
+                var picker = new FolderPicker(subject, new string[0], "Download email",
+                    "Save this email to a folder", "Create && Save", "Save", "Cancel");
+                var worker = new System.Threading.Thread(() =>
+                {
+                    try
+                    {
+                        var info = ExtractArchiveInfo(mail, cfg);
+                        string code = Field(info, "code"), company = Field(info, "company"),
+                               type = Field(info, "type"), year = Field(info, "year"), sap = Field(info, "sap");
+                        if (string.IsNullOrWhiteSpace(year)) year = DateTime.Now.Year.ToString();
+                        string baseDir = ResolveBaseDir(cfg, type, code);
+                        _archiveBaseDir = baseDir;
+                        System.Collections.Generic.List<string> matches, existing; string newRel;
+                        BuildArchiveSuggestions(baseDir, year, company, sap, out matches, out newRel, out existing);
+                        picker.SetFolders(existing.ToArray());
+                        picker.SetSuggestions(matches.ToArray(), newRel);
+                    }
+                    catch { }
+                });
+                worker.IsBackground = true; worker.Start();
+
                 try
                 {
-                    var r = dlg.ShowDialog();
-                    SaveDownloadFolders(dlg.Folders);            // persist any folders the user added
-                    if (r == DialogResult.OK && !string.IsNullOrEmpty(dlg.Chosen))
-                        SaveEmail(mail, dlg.Chosen, subject);
+                    var r = picker.ShowDialog();
+                    if (r == DialogResult.OK)
+                    {
+                        string rel = !string.IsNullOrEmpty(picker.CreateFolder) ? picker.CreateFolder : picker.Chosen;
+                        if (!string.IsNullOrEmpty(rel))
+                        {
+                            string root = _archiveBaseDir ?? cfg.ClientBase;
+                            string abs = Path.IsPathRooted(rel) ? rel : Path.Combine(root, rel);
+                            if (!string.IsNullOrWhiteSpace(cfg.Subfolder)) abs = Path.Combine(abs, cfg.Subfolder);
+                            SaveEmailPerMode(mail, abs, subject, cfg.SaveMode);
+                        }
+                    }
                 }
-                finally { dlg.Dispose(); }
+                finally { picker.Dispose(); }
             }
             catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
+        }
+
+        // ---- Email-archive: read config, extract entities, suggest folders, save per mode ----
+        private class ArchiveCfg
+        {
+            public string ClientBase = "", SupplierBase = "", SaveMode = "both", Subfolder = "";
+            public System.Collections.Generic.Dictionary<string, string> Codes =
+                new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            public bool Ready { get { return !string.IsNullOrWhiteSpace(ClientBase); } }
+        }
+
+        private ArchiveCfg ReadArchiveCfg()
+        {
+            var cfg = new ArchiveCfg();
+            try
+            {
+                string p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                                        "AxonOutlook", "archive.json");
+                if (!File.Exists(p)) return cfg;
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var d = js.DeserializeObject(File.ReadAllText(p)) as System.Collections.Generic.Dictionary<string, object>;
+                if (d == null) return cfg;
+                if (d.ContainsKey("client_base") && d["client_base"] != null) cfg.ClientBase = d["client_base"].ToString();
+                if (d.ContainsKey("supplier_base") && d["supplier_base"] != null) cfg.SupplierBase = d["supplier_base"].ToString();
+                if (d.ContainsKey("save_mode") && d["save_mode"] != null) cfg.SaveMode = d["save_mode"].ToString();
+                if (d.ContainsKey("default_subfolder") && d["default_subfolder"] != null) cfg.Subfolder = d["default_subfolder"].ToString();
+                var cc = d.ContainsKey("country_codes") ? d["country_codes"] as System.Collections.Generic.Dictionary<string, object> : null;
+                if (cc != null) foreach (var kv in cc) if (kv.Value != null) cfg.Codes[kv.Key] = kv.Value.ToString();
+            }
+            catch { }
+            return cfg;
+        }
+
+        private System.Collections.Generic.Dictionary<string, object> ExtractArchiveInfo(dynamic mail, ArchiveCfg cfg)
+        {
+            string subject = ""; try { subject = (string)mail.Subject; } catch { }
+            string sender = ""; try { sender = (string)mail.SenderName; } catch { }
+            string senderEmail = ""; try { senderEmail = (string)mail.SenderEmailAddress; } catch { }
+            string body = ""; try { body = (string)mail.Body; } catch { }
+            if (body.Length > 1500) body = body.Substring(0, 1500);
+            var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+            string mapJson = js.Serialize(cfg.Codes);
+            string prompt =
+                "Read this email and reply with ONLY JSON: {\"code\":\"\",\"company\":\"\",\"type\":\"client|supplier\"," +
+                "\"year\":\"\",\"sap\":\"\"}. Determine the sender's COUNTRY from the email domain, any phone numbers " +
+                "(+32 Belgium, +49 Germany, +31 Netherlands, +33 France, etc.), and address, then set \"code\" using this " +
+                "Country->code map: " + mapJson + " (empty if the country isn't in the map). \"company\" = the client/supplier " +
+                "company name. \"type\" = 'client' if they buy from us (an order to us) or 'supplier' if they sell to us " +
+                "(their quote/invoice). \"year\" = a 4-digit year from the email, else the current year. \"sap\" = the order/" +
+                "SAP number in the subject if there is one, else empty.\n\nFrom: " + sender + " <" + senderEmail + ">\n" +
+                "Subject: " + subject + "\n\n" + body;
+            string text = ModelComplete(prompt, 0);
+            var m = System.Text.RegularExpressions.Regex.Match(text ?? "", "\\{[\\s\\S]*\\}");
+            if (!m.Success) return null;
+            try { return js.DeserializeObject(m.Value) as System.Collections.Generic.Dictionary<string, object>; }
+            catch { return null; }
+        }
+
+        private string ResolveBaseDir(ArchiveCfg cfg, string type, string code)
+        {
+            string bas = ((type == "supplier") && !string.IsNullOrWhiteSpace(cfg.SupplierBase)) ? cfg.SupplierBase : cfg.ClientBase;
+            bas = bas.TrimEnd('\\', '/');
+            if (!string.IsNullOrWhiteSpace(code))
+            {
+                var codeVals = new System.Collections.Generic.HashSet<string>(cfg.Codes.Values, StringComparer.OrdinalIgnoreCase);
+                var parts = bas.Split('\\');
+                for (int i = 0; i < parts.Length; i++)
+                    if (codeVals.Contains(parts[i])) { parts[i] = code; break; }
+                bas = string.Join("\\", parts);
+            }
+            return bas;
+        }
+
+        private void BuildArchiveSuggestions(string baseDir, string year, string company, string sap,
+            out System.Collections.Generic.List<string> matches, out string newRel,
+            out System.Collections.Generic.List<string> existing)
+        {
+            matches = new System.Collections.Generic.List<string>();
+            existing = new System.Collections.Generic.List<string>();
+            var parts = new System.Collections.Generic.List<string>();
+            if (!string.IsNullOrWhiteSpace(year)) parts.Add(year);
+            if (!string.IsNullOrWhiteSpace(company)) parts.Add(company);
+            if (!string.IsNullOrWhiteSpace(sap)) parts.Add(sap);
+            newRel = string.Join("\\", parts);
+            try
+            {
+                if (!Directory.Exists(baseDir)) return;
+                CollectDirs(baseDir, baseDir, 0, 3, existing);
+                var scored = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<int, string>>();
+                foreach (var rel in existing)
+                {
+                    int s = 0;
+                    if (!string.IsNullOrEmpty(sap) && rel.IndexOf(sap, StringComparison.OrdinalIgnoreCase) >= 0) s += 100;
+                    if (!string.IsNullOrEmpty(company) && rel.IndexOf(company, StringComparison.OrdinalIgnoreCase) >= 0) s += 10;
+                    if (!string.IsNullOrEmpty(year) && rel.IndexOf(year, StringComparison.Ordinal) >= 0) s += 1;
+                    if (s > 0) scored.Add(new System.Collections.Generic.KeyValuePair<int, string>(s, rel));
+                }
+                scored.Sort((a, b) => b.Key.CompareTo(a.Key));
+                for (int i = 0; i < scored.Count && matches.Count < 5; i++)
+                    if (!matches.Contains(scored[i].Value)) matches.Add(scored[i].Value);
+            }
+            catch { }
+        }
+
+        private static void CollectDirs(string root, string dir, int depth, int maxDepth,
+            System.Collections.Generic.List<string> outList)
+        {
+            if (depth >= maxDepth || outList.Count > 600) return;
+            try
+            {
+                foreach (var d in Directory.GetDirectories(dir))
+                {
+                    outList.Add(d.Substring(root.Length).TrimStart('\\', '/'));
+                    CollectDirs(root, d, depth + 1, maxDepth, outList);
+                    if (outList.Count > 600) return;
+                }
+            }
+            catch { }
+        }
+
+        private void SaveEmailPerMode(dynamic mail, string folder, string subject, string mode)
+        {
+            try
+            {
+                Directory.CreateDirectory(folder);
+                mode = (mode ?? "both").ToLowerInvariant();
+                bool saveMsg = mode == "both" || mode == "email";
+                bool saveAtt = mode == "both" || mode == "attachments";
+                if (saveMsg)
+                {
+                    string name = string.IsNullOrEmpty(subject) ? "email" : subject;
+                    foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, ' ');
+                    name = name.Trim(); if (name.Length == 0) name = "email"; if (name.Length > 120) name = name.Substring(0, 120);
+                    string path = Path.Combine(folder, name + ".msg");
+                    int i = 1;
+                    while (File.Exists(path)) { path = Path.Combine(folder, name + " (" + i + ").msg"); i++; }
+                    mail.SaveAs(path, 9);   // olMSGUnicode
+                }
+                if (saveAtt)
+                {
+                    try
+                    {
+                        foreach (dynamic att in mail.Attachments)
+                        {
+                            try
+                            {
+                                string an = (string)att.FileName;
+                                foreach (char c in Path.GetInvalidFileNameChars()) an = an.Replace(c, ' ');
+                                string ap = Path.Combine(folder, an);
+                                string bn = Path.GetFileNameWithoutExtension(ap), ex = Path.GetExtension(ap);
+                                int j = 1;
+                                while (File.Exists(ap)) { ap = Path.Combine(folder, bn + " (" + j + ")" + ex); j++; }
+                                att.SaveAsFile(ap);
+                            }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                }
+                Ui.Notify("Saved to:\n" + folder, "Axon intelligence");
+            }
+            catch (Exception ex) { Ui.Notify("Couldn't save: " + ex.Message, "Axon intelligence"); }
         }
 
         // Save the email as a .msg into the chosen disk folder (unique filename from the subject).
@@ -1462,13 +1717,15 @@ namespace Axon.OutlookAddin
         private readonly ListBox _list;
         private readonly TextBox _search;
         private readonly TextBox _newFolderBox;
-        private readonly string[] _all;
+        private string[] _all;
         private readonly Panel _suggPanel;
 
-        public FolderPicker(string subject, string[] folders)
+        public FolderPicker(string subject, string[] folders, string winTitle = "Move email",
+            string headTitle = "Move this email to a folder", string createVerb = "Create && Move",
+            string primaryVerb = "Move", string cancelVerb = "Keep in Inbox")
         {
             _all = folders ?? new string[0];
-            Text = "Axon intelligence — Move email";
+            Text = "Axon intelligence — " + winTitle;
             ClientSize = new System.Drawing.Size(500, 648);
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -1477,7 +1734,7 @@ namespace Axon.OutlookAddin
             Font = new System.Drawing.Font("Segoe UI", 9.5F);
             int W = ClientSize.Width, H = ClientSize.Height;
 
-            Controls.Add(Ui.Title("Move this email to a folder", 22, 18, W - 44));
+            Controls.Add(Ui.Title(headTitle, 22, 18, W - 44));
             Controls.Add(Ui.Sub(subject ?? "(no subject)", 22, 46, W - 44));
 
             _suggPanel = new Panel { Left = 20, Top = 74, Width = W - 40, Height = 176 };
@@ -1487,7 +1744,7 @@ namespace Axon.OutlookAddin
             Controls.Add(Ui.Caption("OR CREATE A NEW FOLDER", 22, 256, 300));
             _newFolderBox = new TextBox { Left = 22, Top = 274, Width = W - 44 - 8 - 148, BorderStyle = BorderStyle.FixedSingle };
             Controls.Add(_newFolderBox);
-            var createBtn = Ui.Accent("Create && Move", W - 22 - 148, 272, 148, 28);
+            var createBtn = Ui.Accent(createVerb, W - 22 - 148, 272, 148, 28);
             createBtn.Click += (o, e) =>
             {
                 string nm = _newFolderBox.Text.Trim();
@@ -1510,13 +1767,21 @@ namespace Axon.OutlookAddin
             Controls.Add(_list);
             Filter();
 
-            var keep = Ui.Subtle("Keep in Inbox", W - 22 - 130, H - 50, 130, 34);
+            var keep = Ui.Subtle(cancelVerb, W - 22 - 130, H - 50, 130, 34);
             keep.DialogResult = DialogResult.Cancel;
             Controls.Add(keep);
             CancelButton = keep;
-            var move = Ui.Accent("Move", keep.Left - 8 - 104, H - 50, 104, 34);
+            var move = Ui.Accent(primaryVerb, keep.Left - 8 - 104, H - 50, 104, 34);
             move.Click += (o, e) => PickFromList();
             Controls.Add(move);
+        }
+
+        public void SetFolders(string[] folders)
+        {
+            if (IsDisposed || Disposing) return;
+            if (InvokeRequired) { try { BeginInvoke(new Action(() => SetFolders(folders))); } catch { } return; }
+            _all = folders ?? new string[0];
+            Filter();
         }
 
         public void SetSuggestions(string[] matches, string newFolder)

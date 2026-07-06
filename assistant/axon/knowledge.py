@@ -124,13 +124,14 @@ def ask_documents(args):
         return _result(f"No readable documents found in {folder}.", True)
     context = "\n\n".join(f"[{os.path.basename(p)}]\n{c}" for p, c in top)
     try:
-        client = OpenAI()
+        from axon.llm import text_llm
+        client, model = text_llm()
         prompt = (
             "Answer the question using ONLY the document excerpts below. Cite the source file name(s) "
             "in [brackets] for each claim. If the answer isn't in the excerpts, say so plainly.\n\n"
             f"EXCERPTS:\n{context[:12000]}\n\nQUESTION: {question}")
         resp = client.chat.completions.create(
-            model=MODEL, messages=[{"role": "user", "content": prompt}], temperature=0)
+            model=model, messages=[{"role": "user", "content": prompt}], temperature=0)
         ans = resp.choices[0].message.content or ""
     except Exception as e:
         return _result(f"Q&A failed: {e}", True)

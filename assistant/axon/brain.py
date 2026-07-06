@@ -18,6 +18,8 @@ from axon import approval
 from axon import memory
 from axon.outlook import my_tone
 from axon.context import active_context_note
+from axon.llm import text_llm
+from axon.util import scrub_identity
 
 
 def _tone_block():
@@ -42,10 +44,12 @@ def chat(question, on_status=None, image_path=None, history=None):
     Supports an attached screenshot (vision) and prior turns (history) for follow-up context.
     history is a list of {"role": "user"|"assistant", "content": "..."} from earlier in the chat."""
     if not os.getenv("OPENAI_API_KEY"):
-        return "OPENAI_API_KEY is not set. Add it to assistant/.env"
+        return "Axon isn't set up with an API key yet."
     if on_status:
         on_status("Maia is thinking...")
-    client = OpenAI()
+    has_image = bool(image_path and os.path.isfile(image_path))
+    # Text-only chat routes to Mistral (cheaper); a screenshot needs vision -> OpenAI.
+    client, model = (OpenAI(), MODEL) if has_image else text_llm()
     content = question
     if image_path and os.path.isfile(image_path):
         try:
@@ -71,10 +75,10 @@ def chat(question, on_status=None, image_path=None, history=None):
         messages.extend(history)            # prior turns, so follow-ups keep context
     messages.append({"role": "user", "content": content})
     try:
-        resp = client.chat.completions.create(model=MODEL, messages=messages, temperature=0.4)
-        return (resp.choices[0].message.content or "").strip() or "(no answer)"
+        resp = client.chat.completions.create(model=model, messages=messages, temperature=0.4)
+        return scrub_identity((resp.choices[0].message.content or "").strip()) or "(no answer)"
     except Exception as e:
-        return f"Error: {e}"
+        return scrub_identity(f"Error: {e}")
 
 
 def run_task(question, on_status=None, should_cancel=None, on_approval=None, image_path=None, on_plan=None):
@@ -95,7 +99,7 @@ def run_task(question, on_status=None, should_cancel=None, on_approval=None, ima
         return "Stopped."
 
     if not os.getenv("OPENAI_API_KEY"):
-        msg = "OPENAI_API_KEY is not set. Add it to assistant/.env"
+        msg = "Axon isn't set up with an API key yet."
         status(msg)
         return msg
 
@@ -154,7 +158,7 @@ def run_task(question, on_status=None, should_cancel=None, on_approval=None, ima
             messages.append(assistant_msg)
 
             if not msg.tool_calls:
-                final = msg.content or "Done."
+                final = scrub_identity(msg.content or "Done.")
                 status("[done] " + final)
                 return final
 
@@ -342,7 +346,7 @@ def guide_live(question, on_step=None, should_cancel=None, max_steps=25):
             on_step({"instruction": instruction, "marker": marker, "done": done})
 
     if not os.getenv("OPENAI_API_KEY"):
-        emit("OPENAI_API_KEY is not set. Add it to assistant/.env", None, True)
+        emit("Axon isn't set up with an API key yet.", None, True)
         return
 
     history = []
@@ -357,7 +361,7 @@ def guide_live(question, on_step=None, should_cancel=None, max_steps=25):
         try:
             data = _guide_decide(question, history, _img_b64(img))
         except Exception as e:
-            emit(f"Guidance failed: {e}", None, True)
+            emit(scrub_identity(f"Guidance failed: {e}"), None, True)
             return
         if cancelled():
             return
@@ -410,7 +414,7 @@ def guide(question, on_status=None, should_cancel=None):
         return bool(should_cancel and should_cancel())
 
     if not os.getenv("OPENAI_API_KEY"):
-        return {"steps_text": "OPENAI_API_KEY is not set. Add it to assistant/.env", "pointer": None}
+        return {"steps_text": "Axon isn't set up with an API key yet.", "pointer": None}
     status("Axon intelligence is looking at your screen...")
     if cancelled():
         return {"steps_text": "Stopped.", "pointer": None}
@@ -438,7 +442,7 @@ def guide(question, on_status=None, should_cancel=None):
             return {"steps_text": "Stopped.", "pointer": None}
         data = json.loads(resp.choices[0].message.content or "{}")
     except Exception as e:
-        return {"steps_text": f"Guidance failed: {e}", "pointer": None}
+        return {"steps_text": scrub_identity(f"Guidance failed: {e}"), "pointer": None}
     steps = data.get("steps") or []
     steps_text = "\n".join(str(s) for s in steps) if isinstance(steps, list) else str(steps)
     pointer = data.get("pointer") if isinstance(data.get("pointer"), dict) else None
