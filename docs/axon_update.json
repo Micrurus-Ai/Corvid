@@ -1,0 +1,6 @@
+{
+  "_comment": "Axon auto-update manifest. Apps check this file and show the 'Update' pill when 'version' is newer than the installed build. TO RELEASE: (1) build the new installer and bump APP_VERSION + the installer AppVersion, (2) drop the new Axon-Setup.exe on your internal share, (3) set 'version' below to the new number and 'url' to that share path, then commit this file. Keep the installer on an INTERNAL share only (it has baked keys) — this JSON is public but carries no secret.",
+  "version": "1.0.0",
+  "url": "\\\\SERVER\\Share\\Axon\\Axon-Setup.exe",
+  "notes": ""
+}
