@@ -33,6 +33,12 @@ MAX_STEPS = int(os.getenv("ASSISTANT_MAX_STEPS", "30"))
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
 MISTRAL_BASE = os.getenv("MISTRAL_BASE", "https://api.mistral.ai/v1")
 TEXT_MODEL = os.getenv("ASSISTANT_TEXT_MODEL", "mistral-medium-latest")
+
+# --- self-update -------------------------------------------------------------
+# APP_VERSION is baked at build time; bump it each release and keep it in sync with the installer's
+# AppVersion. UPDATE_URL points at a small JSON manifest ({version,url,notes}); empty = updates off.
+APP_VERSION = os.getenv("AXON_VERSION", "1.0.0")
+UPDATE_URL = os.getenv("AXON_UPDATE_URL", "")
 BROWSE_MODEL = os.getenv("ASSISTANT_BROWSE_MODEL", "gpt-4o")
 BROWSE_FALLBACK_MODEL = os.getenv("ASSISTANT_BROWSE_FALLBACK_MODEL", "gpt-4o-mini")
 # Guide mode does vision grounding on a grid; a fast vision model keeps it responsive.

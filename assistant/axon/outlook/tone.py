@@ -40,12 +40,19 @@ foreach ($m in $items) {
   if ($n -ge 40) { break }
   try {
     $b = [string]$m.Body
-    # Cut off quoted history so we learn the user's OWN writing, not what they replied to.
-    foreach ($mark in @("`r`nFrom:", "`r`nVan:", "-----Original", "________________________________")) {
+    # Cut off quoted history so we learn the user's OWN writing, not the emails they replied to.
+    $cut = $b.Length
+    # Outlook-style header blocks + forward markers that introduce quoted / forwarded content.
+    foreach ($mark in @("`r`nFrom:", "`r`nVan:", "`r`nSent:", "`r`nVerzonden:", "-----Original", "-----Oorspronkelijk", "Forwarded message", "Begin forwarded message", "Doorgestuurd bericht", "________________________________")) {
       $i = $b.IndexOf($mark)
-      if ($i -gt 0) { $b = $b.Substring(0, $i) }
+      if ($i -ge 0 -and $i -lt $cut) { $cut = $i }
     }
-    $b = $b.Trim()
+    # Reply intro lines ("On ... wrote:", Dutch "Op ... schreef:", French "Le ... a ecrit :") and > quotes.
+    foreach ($pat in @('(?im)^\s*On .+ wrote:\s*$', '(?im)^\s*Op .+ (schreef|geschreven).*:\s*$', '(?im)^\s*Le .+ a .crit\s*:\s*$', '(?m)^>')) {
+      $mm = [regex]::Match($b, $pat)
+      if ($mm.Success -and $mm.Index -lt $cut) { $cut = $mm.Index }
+    }
+    $b = $b.Substring(0, $cut).Trim()
     if ($b.Length -lt 20) { continue }
     if ($b.Length -gt 1200) { $b = $b.Substring(0, 1200) }
     [Console]::Out.WriteLine("=====EMAIL=====")
@@ -67,12 +74,17 @@ def learn_my_tone(args=None):
         return _result("Couldn't read your Sent items: " + (out or "no output"), True)
     samples = out[:16000]
     prompt = (
-        "Below are recent emails the user has SENT (quoted history removed). Write a concise STYLE "
-        "GUIDE another writer could follow to sound exactly like this person when drafting their "
-        "emails. Describe: typical greeting, sign-off, formality/warmth, sentence length, whether "
-        "they use bullet points or emojis, and any signature phrases. If you see Dutch, French, or "
-        "English, add a one-line note per language. Under 200 words. Do NOT summarise the email "
-        "contents.\n\n"
+        "Below are recent emails the USER has SENT (their own outgoing messages, quoted history "
+        "removed). Describe ONLY how the user themselves writes; ignore any quoted or forwarded text "
+        "from other people that may remain. Write a concise STYLE GUIDE another writer could follow to "
+        "sound exactly like this person when drafting their emails. Describe: typical greeting, "
+        "sign-off, formality/warmth, sentence length, and whether they use bullet points or emojis. "
+        "Note which languages they write in (Dutch, French, English) and the general tone per "
+        "language. "
+        "IMPORTANT: describe PATTERNS, not one-off examples. Do NOT quote specific phrases unless the "
+        "SAME phrase clearly recurs across MULTIPLE emails. If you are not certain a phrase is the "
+        "user's own recurring wording, leave it out entirely. Under 200 words. Do NOT summarise the "
+        "email contents.\n\n"
         "Format: plain text with simple '- ' bullets. Do NOT use Markdown and do NOT wrap any words "
         "in asterisks (no * or **). Write labels as 'Greeting:' not '**Greeting**:'.\n\n" + samples
     )

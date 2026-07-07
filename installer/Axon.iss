@@ -35,6 +35,10 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
+; Axon branding: the setup .exe icon, and the Add/Remove Programs icon (the app exe, which carries
+; the same icon via PyInstaller --icon).
+SetupIconFile=axon.ico
+UninstallDisplayIcon={app}\{#AppExe}
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
@@ -67,6 +71,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Start Axon intelligence now"; Flags: nowait postinstall skipifsilent
+; Silent self-update path: the dot runs the setup with /relaunch=1, so reopen the app afterwards.
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: RelaunchRequested
 
 [Code]
 const
@@ -123,6 +129,13 @@ begin
   json := '{"api_base": "https://api.mistral.ai/v1", "api_key": "' + key + '", "model": "mistral-medium-latest",' +
           ' "backup_api_base": "https://api.openai.com/v1", "backup_api_key": "", "backup_model": "gpt-4o"}';
   SaveStringToFile(path, json, False);
+end;
+
+{ True when the dot triggered a silent self-update (Axon-Setup.exe /relaunch=1), so [Run] reopens
+  the app once the in-place upgrade finishes. }
+function RelaunchRequested(): Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

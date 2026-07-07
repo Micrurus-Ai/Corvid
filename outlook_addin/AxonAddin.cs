@@ -459,6 +459,58 @@ namespace Axon.OutlookAddin
         }
 
         private string _archiveBaseDir;
+        private string _archiveCompany;   // client/company of the email being archived (for the memory)
+
+        // --- archive memory: remember where each client's emails were last filed -----------------
+        private static string ArchiveMemPath()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                                "AxonOutlook", "archive_memory.json");
+        }
+
+        private System.Collections.Generic.Dictionary<string, object> ReadArchiveMemory()
+        {
+            try
+            {
+                string p = ArchiveMemPath();
+                if (File.Exists(p))
+                {
+                    var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                    var d = js.DeserializeObject(File.ReadAllText(p)) as System.Collections.Generic.Dictionary<string, object>;
+                    if (d != null) return d;
+                }
+            }
+            catch { }
+            return new System.Collections.Generic.Dictionary<string, object>();
+        }
+
+        private void SaveArchiveChoice(string company, string relPath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(company) || string.IsNullOrWhiteSpace(relPath)) return;
+                if (Path.IsPathRooted(relPath)) return;   // only remember relative archive paths
+                var mem = ReadArchiveMemory();
+                mem[company.Trim().ToLowerInvariant()] = relPath;
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                Directory.CreateDirectory(Path.GetDirectoryName(ArchiveMemPath()));
+                File.WriteAllText(ArchiveMemPath(), js.Serialize(mem));
+            }
+            catch { }
+        }
+
+        private string RememberedFolder(string company)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(company)) return "";
+                object v;
+                if (ReadArchiveMemory().TryGetValue(company.Trim().ToLowerInvariant(), out v) && v != null)
+                    return v.ToString();
+            }
+            catch { }
+            return "";
+        }
 
         public void OnDownload(object control)
         {
@@ -496,12 +548,16 @@ namespace Axon.OutlookAddin
                         string code = Field(info, "code"), company = Field(info, "company"),
                                type = Field(info, "type"), year = Field(info, "year"), sap = Field(info, "sap");
                         if (string.IsNullOrWhiteSpace(year)) year = DateTime.Now.Year.ToString();
+                        string sender = ""; try { sender = (string)mail.SenderName; } catch { }
+                        string body = ""; try { body = (string)mail.Body; } catch { }
                         string baseDir = ResolveBaseDir(cfg, type, code);
                         _archiveBaseDir = baseDir;
-                        System.Collections.Generic.List<string> matches, existing; string newRel;
-                        BuildArchiveSuggestions(baseDir, year, company, sap, out matches, out newRel, out existing);
+                        _archiveCompany = company;
+                        System.Collections.Generic.List<string> matches, existing, reasons; string newRel;
+                        BuildArchiveSuggestions(baseDir, subject, sender, body, year, company, sap,
+                                                out matches, out reasons, out newRel, out existing);
                         picker.SetFolders(existing.ToArray());
-                        picker.SetSuggestions(matches.ToArray(), newRel);
+                        picker.SetSuggestions(matches.ToArray(), reasons.ToArray(), newRel);
                     }
                     catch { }
                 });
@@ -519,6 +575,7 @@ namespace Axon.OutlookAddin
                             string abs = Path.IsPathRooted(rel) ? rel : Path.Combine(root, rel);
                             if (!string.IsNullOrWhiteSpace(cfg.Subfolder)) abs = Path.Combine(abs, cfg.Subfolder);
                             SaveEmailPerMode(mail, abs, subject, cfg.SaveMode);
+                            SaveArchiveChoice(_archiveCompany, rel);   // learn where this client's mail goes
                         }
                     }
                 }
@@ -598,21 +655,54 @@ namespace Axon.OutlookAddin
             return bas;
         }
 
-        private void BuildArchiveSuggestions(string baseDir, string year, string company, string sap,
-            out System.Collections.Generic.List<string> matches, out string newRel,
-            out System.Collections.Generic.List<string> existing)
+        private void BuildArchiveSuggestions(string baseDir, string subject, string sender, string body,
+            string year, string company, string sap,
+            out System.Collections.Generic.List<string> matches, out System.Collections.Generic.List<string> reasons,
+            out string newRel, out System.Collections.Generic.List<string> existing)
         {
-            matches = new System.Collections.Generic.List<string>();
+            var mm = new System.Collections.Generic.List<string>();   // locals so the lambda can capture them
+            var rr = new System.Collections.Generic.List<string>();
+            matches = mm;
+            reasons = rr;
             existing = new System.Collections.Generic.List<string>();
             var parts = new System.Collections.Generic.List<string>();
             if (!string.IsNullOrWhiteSpace(year)) parts.Add(year);
             if (!string.IsNullOrWhiteSpace(company)) parts.Add(company);
             if (!string.IsNullOrWhiteSpace(sap)) parts.Add(sap);
             newRel = string.Join("\\", parts);
+
+            Action<string, string> add = (rel, why) =>
+            {
+                if (string.IsNullOrEmpty(rel) || mm.Count >= 5) return;
+                foreach (var m in mm) if (string.Equals(m, rel, StringComparison.OrdinalIgnoreCase)) return;
+                mm.Add(rel); rr.Add(why);
+            };
+
             try
             {
                 if (!Directory.Exists(baseDir)) return;
                 CollectDirs(baseDir, baseDir, 0, 3, existing);
+                var existingSet = new System.Collections.Generic.HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
+
+                // #1 Memory: if this client's mail was filed somewhere before and it still exists, lead with it.
+                string remembered = RememberedFolder(company);
+                if (!string.IsNullOrEmpty(remembered) && existingSet.Contains(remembered))
+                    add(remembered, "filed here before");
+
+                // Preferred: let the AI pick where THIS email belongs (understands client + topic).
+                string aiNew;
+                System.Collections.Generic.List<string> aiReasons;
+                var aiMatches = RankArchiveViaApi(subject, sender, body, company, existing, out aiReasons, out aiNew);
+                if (aiMatches != null && aiMatches.Count > 0)
+                {
+                    for (int i = 0; i < aiMatches.Count; i++)
+                        add(aiMatches[i], i < aiReasons.Count ? aiReasons[i] : "best match");
+                    if (!string.IsNullOrWhiteSpace(aiNew)) newRel = aiNew;
+                    if (matches.Count > 0) return;
+                }
+
+                // Fallback: keyword scoring. Require a real signal (SAP or client name); a bare year match
+                // is too weak on its own, so it no longer floods the list with every "2025" folder.
                 var scored = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<int, string>>();
                 foreach (var rel in existing)
                 {
@@ -620,13 +710,76 @@ namespace Axon.OutlookAddin
                     if (!string.IsNullOrEmpty(sap) && rel.IndexOf(sap, StringComparison.OrdinalIgnoreCase) >= 0) s += 100;
                     if (!string.IsNullOrEmpty(company) && rel.IndexOf(company, StringComparison.OrdinalIgnoreCase) >= 0) s += 10;
                     if (!string.IsNullOrEmpty(year) && rel.IndexOf(year, StringComparison.Ordinal) >= 0) s += 1;
-                    if (s > 0) scored.Add(new System.Collections.Generic.KeyValuePair<int, string>(s, rel));
+                    if (s >= 10) scored.Add(new System.Collections.Generic.KeyValuePair<int, string>(s, rel));
                 }
                 scored.Sort((a, b) => b.Key.CompareTo(a.Key));
-                for (int i = 0; i < scored.Count && matches.Count < 5; i++)
-                    if (!matches.Contains(scored[i].Value)) matches.Add(scored[i].Value);
+                foreach (var kv in scored) add(kv.Value, kv.Key >= 100 ? "order number" : "client match");
             }
             catch { }
+        }
+
+        // Ask the model to choose the best archive folders for this email from the ones that exist.
+        // Returns exact-matching relative paths (validated against `existing` so it can't hallucinate),
+        // a 1-2 word reason per pick, and an optional new folder that follows the same structure.
+        private System.Collections.Generic.List<string> RankArchiveViaApi(string subject, string sender,
+            string body, string company, System.Collections.Generic.List<string> existing,
+            out System.Collections.Generic.List<string> reasons, out string newFolder)
+        {
+            newFolder = "";
+            reasons = new System.Collections.Generic.List<string>();
+            try
+            {
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                // Keep the list a sane size: the client's own folders first, then a sample of the rest.
+                var list = new System.Collections.Generic.List<string>();
+                if (!string.IsNullOrEmpty(company))
+                    foreach (var r in existing)
+                        if (r.IndexOf(company, StringComparison.OrdinalIgnoreCase) >= 0) list.Add(r);
+                foreach (var r in existing) { if (list.Count >= 350) break; if (!list.Contains(r)) list.Add(r); }
+
+                string b = body ?? ""; if (b.Length > 1200) b = b.Substring(0, 1200);
+                string prompt =
+                    "You are filing an email into one of the user's ARCHIVE folders on disk (organised by client, " +
+                    "topic and year).\n\nEmail\n  Subject: " + subject + "\n  From: " + sender +
+                    "\n  Body (truncated):\n" + b + "\n\nClient/company (best guess): " + company + "\n\n" +
+                    "The user's existing archive folders (relative paths):\n" + js.Serialize(list.ToArray()) + "\n\n" +
+                    "Decide where THIS email should be saved, based on the client/company and what the email is ABOUT " +
+                    "(e.g. the platform, campaign or project named in the subject). List the best-fitting folders first " +
+                    "(up to 5), copied EXACTLY from the list, and ONLY genuinely good fits (do not pad). " +
+                    "Prefer the DEEPEST, most specific folder for this client (its own subfolder, and the right year " +
+                    "subfolder) over a generic parent folder. If nothing fits well, propose a short NEW folder path that " +
+                    "follows the SAME structure as the existing folders.\n" +
+                    "For each pick give a 1-2 word reason (e.g. 'client', 'same topic', 'client + year').\n" +
+                    "Reply with ONLY JSON: {\"matches\":[{\"path\":\"exact folder path\",\"why\":\"1-2 words\"}], " +
+                    "\"new_folder\":\"a relative path or empty\"}";
+                string text = ModelComplete(prompt, 0);
+                if (string.IsNullOrEmpty(text)) return null;
+                var mt = System.Text.RegularExpressions.Regex.Match(text, "\\{[\\s\\S]*\\}");
+                if (!mt.Success) return null;
+                var d = js.DeserializeObject(mt.Value) as System.Collections.Generic.Dictionary<string, object>;
+                if (d == null) return null;
+                var outList = new System.Collections.Generic.List<string>();
+                var existingSet = new System.Collections.Generic.HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
+                if (d.ContainsKey("matches") && d["matches"] is object[])
+                    foreach (var o in (object[])d["matches"])
+                    {
+                        string val = "", why = "best match";
+                        var row = o as System.Collections.Generic.Dictionary<string, object>;
+                        if (row != null)
+                        {
+                            if (row.ContainsKey("path") && row["path"] != null) val = row["path"].ToString();
+                            if (row.ContainsKey("why") && row["why"] != null) why = row["why"].ToString();
+                        }
+                        else { val = (o == null ? "" : o.ToString()); }   // tolerate a plain string
+                        val = val.Replace("/", "\\").Trim();
+                        if (existingSet.Contains(val) && !outList.Contains(val)) { outList.Add(val); reasons.Add(why.Trim()); }
+                        if (outList.Count >= 5) break;
+                    }
+                if (d.ContainsKey("new_folder") && d["new_folder"] != null)
+                    newFolder = d["new_folder"].ToString().Replace("/", "\\").Trim();
+                return outList;
+            }
+            catch { newFolder = ""; reasons = new System.Collections.Generic.List<string>(); return null; }
         }
 
         private static void CollectDirs(string root, string dir, int depth, int maxDepth,
@@ -1784,23 +1937,31 @@ namespace Axon.OutlookAddin
             Filter();
         }
 
-        public void SetSuggestions(string[] matches, string newFolder)
+        // Back-compat: the Move feature calls this without reasons.
+        public void SetSuggestions(string[] matches, string newFolder) { SetSuggestions(matches, null, newFolder); }
+
+        public void SetSuggestions(string[] matches, string[] reasons, string newFolder)
         {
             if (IsDisposed || Disposing) return;
-            if (InvokeRequired) { try { BeginInvoke(new Action(() => SetSuggestions(matches, newFolder))); } catch { } return; }
+            if (InvokeRequired) { try { BeginInvoke(new Action(() => SetSuggestions(matches, reasons, newFolder))); } catch { } return; }
             int w = _suggPanel.Width;
             _suggPanel.Controls.Clear();
             if (matches != null && matches.Length > 0)
             {
                 _suggPanel.Controls.Add(Ui.Caption("SUGGESTED FOLDERS", 2, 0, 300));
                 int y = 18;
-                foreach (var name in matches)
+                for (int i = 0; i < matches.Length; i++)
                 {
-                    string n = name;
-                    var b = Ui.RowBtn("→   " + Ui.Leaf(name), 2, y, w - 4, 28);
+                    string n = matches[i];
+                    // Show the full relative path (not just the leaf) so it's clear exactly where it saves.
+                    var b = Ui.RowBtn("→   " + n, 2, y, w - 4, 28);
                     b.Click += (o, e) => { Chosen = n; DialogResult = DialogResult.OK; Close(); };
                     _suggPanel.Controls.Add(b); y += 31;
                 }
+                // #2 Pre-select the top suggestion in the list so the primary Save button uses it by default.
+                for (int i = 0; i < _list.Items.Count; i++)
+                    if (string.Equals(_list.Items[i].ToString(), matches[0], StringComparison.OrdinalIgnoreCase))
+                    { _list.SelectedIndex = i; break; }
             }
             else
             {

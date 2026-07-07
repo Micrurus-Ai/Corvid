@@ -38,6 +38,7 @@ Step "2/4  Building the dot (AxonIntelligence.exe)"
 Push-Location $asst
 try {
     & ".\.venv\Scripts\pyinstaller.exe" --noconfirm --windowed --name AxonIntelligence `
+        --icon "$root\installer\axon.ico" `
         --add-data ".env;." --collect-all browser_use --collect-all certifi --collect-all openai `
         --collect-all pptx --collect-all openpyxl --collect-all docx `
         --collect-all pdfplumber --collect-all pypdf --collect-all pdfminer `

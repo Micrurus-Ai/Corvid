@@ -52,6 +52,9 @@ class Composer(QtWidgets.QWidget):
     ask_requested = QtCore.Signal(str)   # 'Ask Maia' — straight to the LLM, no actions
     cancel_requested = QtCore.Signal()
     dismissed = QtCore.Signal()
+    update_available = QtCore.Signal(dict)   # a newer build is published -> show the Update pill
+    _update_quit = QtCore.Signal()           # installer launched -> quit so it can upgrade in place
+    _update_error = QtCore.Signal()          # download failed -> re-enable the pill
 
     def __init__(self):
         super().__init__()
@@ -87,6 +90,26 @@ class Composer(QtWidgets.QWidget):
         title_block.addWidget(title)
         header.addLayout(title_block)
         header.addStretch(1)
+
+        # Update pill: hidden until a newer build is published, then one click updates in place.
+        self.update_btn = QtWidgets.QPushButton("Update")
+        self.update_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.update_btn.setVisible(False)
+        self.update_btn.setStyleSheet(
+            "QPushButton{background:#2f6fed;color:#ffffff;border:none;border-radius:11px;"
+            f"padding:5px 12px;{FONT_CSS}font-size:11px;font-weight:700;}}"
+            "QPushButton:hover{background:#3f7bf5;}"
+            "QPushButton:disabled{background:#2a2d36;color:#8a8f9c;}")
+        self.update_btn.clicked.connect(self._on_update_clicked)
+        header.addWidget(self.update_btn)
+        self._update_info = None
+        self.update_available.connect(self._show_update)
+        self._update_quit.connect(self._quit_for_update)
+        self._update_error.connect(self._update_failed)
+        QtCore.QTimer.singleShot(5000, self._check_updates)          # shortly after startup
+        self._update_timer = QtCore.QTimer(self)
+        self._update_timer.timeout.connect(self._check_updates)
+        self._update_timer.start(6 * 3600 * 1000)                    # and every 6 hours
 
         self.profile_btn = ProfileButton()  # opens a small dropdown menu (auto-file toggle, etc.)
         header.addWidget(self.profile_btn)
@@ -222,6 +245,73 @@ class Composer(QtWidgets.QWidget):
         for drag_source in (self.card, mark, title):
             drag_source.installEventFilter(self)
         self.prepare_for_open()
+
+    # --- self-update ---------------------------------------------------------
+    def _check_updates(self):
+        """Ask the update manifest (off the UI thread) whether a newer build exists."""
+        import threading
+
+        def work():
+            info = None
+            try:
+                from axon.updater import check_for_update
+                info = check_for_update()
+            except Exception:
+                info = None
+            if info:
+                self.update_available.emit(info)
+        threading.Thread(target=work, daemon=True).start()
+
+    @QtCore.Slot(dict)
+    def _show_update(self, info):
+        self._update_info = info
+        self.update_btn.setText(f"Update to {info['version']}")
+        tip = info.get("notes") or "A new version of Axon is available."
+        self.update_btn.setToolTip(tip + "\nClick to update now.")
+        self.update_btn.setEnabled(True)
+        self.update_btn.setVisible(True)
+
+    def _on_update_clicked(self):
+        info = self._update_info
+        if not info:
+            return
+        msg = f"Update Axon to version {info['version']}?"
+        if info.get("notes"):
+            msg += "\n\nWhat's new:\n" + info["notes"]
+        msg += "\n\nAxon will close for a moment and reopen updated."
+        if QtWidgets.QMessageBox.question(
+                self, "Update available", msg,
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No) != QtWidgets.QMessageBox.Yes:
+            return
+        self.update_btn.setEnabled(False)
+        self.update_btn.setText("Updating...")
+        import threading
+
+        def work():
+            try:
+                from axon.updater import download_installer, launch_installer
+                path = download_installer(info["url"])
+                if path:
+                    launch_installer(path)
+                    self._update_quit.emit()
+                    return
+            except Exception:
+                pass
+            self._update_error.emit()
+        threading.Thread(target=work, daemon=True).start()
+
+    @QtCore.Slot()
+    def _quit_for_update(self):
+        # Give the installer a moment to start, then quit so it can replace files in place.
+        QtCore.QTimer.singleShot(1500, QtWidgets.QApplication.instance().quit)
+
+    @QtCore.Slot()
+    def _update_failed(self):
+        if self._update_info:
+            self.update_btn.setText(f"Update to {self._update_info['version']}")
+        self.update_btn.setEnabled(True)
+        QtWidgets.QMessageBox.warning(
+            self, "Update", "Couldn't download the update right now. Please try again later.")
 
     def prepare_for_open(self):
         self.ensurePolished()
