@@ -486,16 +486,33 @@ namespace Axon.OutlookAddin
         {
             dynamic app = _app;
             if (app == null) return null;
+            // Act on the email in the window the user is ACTUALLY looking at. ActiveWindow() is the
+            // frontmost window — an Inspector (open email) OR the Explorer (reading pane). We deliberately
+            // do NOT lead with ActiveInspector(), because that returns any email left open in a background
+            // window from earlier, so Move/Reply/Summarize would silently act on the wrong email (e.g.
+            // file the fans email you're reading using a stale "Sick leave" window that's still open).
             try
             {
-                dynamic insp = app.ActiveInspector();
-                if (insp != null) { dynamic item = insp.CurrentItem; if (item != null && (int)item.Class == 43) return item; }
+                dynamic win = app.ActiveWindow();
+                if (win != null)
+                {
+                    // An Inspector exposes CurrentItem; an Explorer exposes Selection. Try both, in that order.
+                    try { dynamic item = win.CurrentItem; if (item != null && (int)item.Class == 43) return item; } catch { }
+                    try { dynamic sel = win.Selection; if (sel != null && (int)sel.Count >= 1) { dynamic it = sel.Item(1); if ((int)it.Class == 43) return it; } } catch { }
+                }
             }
             catch { }
+            // Fallbacks if ActiveWindow is unavailable.
             try
             {
                 dynamic exp = app.ActiveExplorer();
                 if (exp != null) { dynamic sel = exp.Selection; if (sel != null && (int)sel.Count >= 1) { dynamic item = sel.Item(1); if ((int)item.Class == 43) return item; } }
+            }
+            catch { }
+            try
+            {
+                dynamic insp = app.ActiveInspector();
+                if (insp != null) { dynamic item = insp.CurrentItem; if (item != null && (int)item.Class == 43) return item; }
             }
             catch { }
             return null;
