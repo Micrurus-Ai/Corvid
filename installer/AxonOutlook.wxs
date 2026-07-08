@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Axon Outlook add-in - per-user MSI (no admin required).
+
+  Does exactly what the Inno EXE (AxonOutlook.iss) does, so it "works the same":
+    - installs AxonAddin.dll + ribbon icons to %LOCALAPPDATA%\AxonOutlook
+    - registers the managed COM add-in under HKCU (per-user), same CLSID/ProgId
+    - registers it under HKCU\...\Outlook\AddIns with LoadBehavior=3
+    - writes %APPDATA%\AxonOutlook\config.json with both keys baked (never clobbers an existing one)
+
+  Built by build-msi.ps1, which stages config.json (with the keys from assistant\.env) and passes
+  its path via the StagedConfig preprocessor variable. IT can deploy the result machine-context via
+  Intune/GPO in the user's context, or a user can double-click it (installs without admin).
+
+  Build (see build-msi.ps1):
+    candle.exe -dStagedConfig="...\config.json" AxonOutlook.wxs
+    light.exe  -sval AxonOutlook.wixobj -o Axon-Outlook.msi
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Axon Outlook add-in"
+           Language="1033"
+           Version="1.0.1.0"
+           Manufacturer="Axon Group"
+           UpgradeCode="E7A3C1B9-2F64-4D18-9A5C-1B7E3D9F62A4">
+
+    <!-- Per-user install: no admin, everything lands in the user's profile + HKCU (same as the EXE). -->
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perUser"
+             InstallPrivileges="limited"
+             Description="Axon intelligence for Outlook"
+             Manufacturer="Axon Group" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of the Axon Outlook add-in is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <!-- %LOCALAPPDATA%\AxonOutlook  (the DLL loads its ribbon icons from its own folder) -->
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="INSTALLFOLDER" Name="AxonOutlook" />
+      </Directory>
+      <!-- %APPDATA%\AxonOutlook  (config.json, same location LoadConfig reads) -->
+      <Directory Id="AppDataFolder">
+        <Directory Id="CONFIGFOLDER" Name="AxonOutlook" />
+      </Directory>
+    </Directory>
+
+    <!-- 1. The add-in DLL + its ribbon icons. -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="AddinFiles" Guid="1C4E9A72-3B85-4F16-9D28-6A1B3E5C7D90">
+        <File Id="AxonAddinDll" Name="AxonAddin.dll" Source="..\outlook_addin\AxonAddin.dll" KeyPath="yes" />
+        <File Name="axon-move.png"      Source="..\outlook_addin\axon-move.png" />
+        <File Name="axon-download.png"  Source="..\outlook_addin\axon-download.png" />
+        <File Name="axon-summarize.png" Source="..\outlook_addin\axon-summarize.png" />
+        <File Name="axon-reply.png"     Source="..\outlook_addin\axon-reply.png" />
+        <File Name="axon-schedule.png"  Source="..\outlook_addin\axon-schedule.png" />
+        <File Name="axon-followup.png"  Source="..\outlook_addin\axon-followup.png" />
+        <File Name="axon-sendlater.png" Source="..\outlook_addin\axon-sendlater.png" />
+        <File Name="axon-write.png"     Source="..\outlook_addin\axon-write.png" />
+        <File Name="axon-attach.png"    Source="..\outlook_addin\axon-attach.png" />
+        <File Name="axon-settings.png"  Source="..\outlook_addin\axon-settings.png" />
+      </Component>
+
+      <!-- 2. Managed COM registration under HKCU (identical keys to the Inno RegisterAddin). -->
+      <Component Id="ComRegistration" Guid="2D5F0B83-4C96-4A27-8E39-7B2C4F6D8E01">
+        <RegistryKey Root="HKCU" Key="Software\Classes\Axon.OutlookAddin\CLSID">
+          <RegistryValue Type="string" Value="{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}" KeyPath="yes" />
+        </RegistryKey>
+        <RegistryKey Root="HKCU" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\InprocServer32">
+          <RegistryValue Type="string" Value="[System64Folder]mscoree.dll" />
+          <RegistryValue Type="string" Name="ThreadingModel" Value="Both" />
+          <RegistryValue Type="string" Name="Class"          Value="Axon.OutlookAddin.Connect" />
+          <RegistryValue Type="string" Name="Assembly"       Value="AxonAddin, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null" />
+          <RegistryValue Type="string" Name="RuntimeVersion" Value="v4.0.30319" />
+          <RegistryValue Type="string" Name="CodeBase"       Value="file:///[#AxonAddinDll]" />
+        </RegistryKey>
+        <RegistryKey Root="HKCU" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\InprocServer32\0.0.0.0">
+          <RegistryValue Type="string" Name="Class"          Value="Axon.OutlookAddin.Connect" />
+          <RegistryValue Type="string" Name="Assembly"       Value="AxonAddin, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null" />
+          <RegistryValue Type="string" Name="RuntimeVersion" Value="v4.0.30319" />
+          <RegistryValue Type="string" Name="CodeBase"       Value="file:///[#AxonAddinDll]" />
+        </RegistryKey>
+        <RegistryKey Root="HKCU" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\ProgId">
+          <RegistryValue Type="string" Value="Axon.OutlookAddin" />
+        </RegistryKey>
+      </Component>
+
+      <!-- 3. Tell Outlook to load it. -->
+      <Component Id="OutlookAddinReg" Guid="3E60A194-5D07-4B38-9F4A-8C3D5E7F9012">
+        <RegistryKey Root="HKCU" Key="Software\Microsoft\Office\Outlook\AddIns\Axon.OutlookAddin">
+          <RegistryValue Type="integer" Name="LoadBehavior"  Value="3" KeyPath="yes" />
+          <RegistryValue Type="string"  Name="FriendlyName"  Value="Axon intelligence" />
+          <RegistryValue Type="string"  Name="Description"   Value="Summarize, reply, schedule, file and download emails with Axon" />
+        </RegistryKey>
+      </Component>
+    </DirectoryRef>
+
+    <!-- 4. config.json with both keys baked. NeverOverwrite => won't clobber an existing config. -->
+    <DirectoryRef Id="CONFIGFOLDER">
+      <Component Id="ConfigFile" Guid="4F71B2A5-6E18-4C49-A05B-9D4E6F801123" NeverOverwrite="yes">
+        <File Id="ConfigJson" Name="config.json" Source="$(var.StagedConfig)" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="MainFeature" Title="Axon Outlook add-in" Level="1">
+      <ComponentRef Id="AddinFiles" />
+      <ComponentRef Id="ComRegistration" />
+      <ComponentRef Id="OutlookAddinReg" />
+      <ComponentRef Id="ConfigFile" />
+    </Feature>
+  </Product>
+</Wix>

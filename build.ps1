@@ -83,10 +83,17 @@ if ($LASTEXITCODE -ne 0) { throw "Dot installer compile failed." }
 & $iscc "/DMistralKey=$mistral" "/DOpenAIKey=$openai" (Join-Path $root "installer\AxonOutlook.iss") | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Outlook add-in installer compile failed." }
 
+# 4c. The Outlook add-in as an MSI (for IT: Intune/GPO) -> Axon-Outlook.msi (same per-user install).
+& powershell -ExecutionPolicy Bypass -File (Join-Path $root "installer\build-msi.ps1") | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Outlook add-in MSI build failed." }
+
 $dot = Join-Path $root "installer\Output\Axon-Dot-Setup.exe"
 $olk = Join-Path $root "installer\Output\Axon-Outlook-Setup.exe"
+$msi = Join-Path $root "installer\Output\Axon-Outlook.msi"
 $dotMb = "{0:N0} MB" -f ((Get-Item $dot).Length / 1MB)
 $olkMb = "{0:N1} MB" -f ((Get-Item $olk).Length / 1MB)
+$msiMb = "{0:N1} MB" -f ((Get-Item $msi).Length / 1MB)
 Write-Host "`nDONE:" -ForegroundColor Green
-Write-Host "  Dot     -> $dot  ($dotMb)" -ForegroundColor Green
-Write-Host "  Outlook -> $olk  ($olkMb)" -ForegroundColor Green
+Write-Host "  Dot         -> $dot  ($dotMb)" -ForegroundColor Green
+Write-Host "  Outlook EXE -> $olk  ($olkMb)" -ForegroundColor Green
+Write-Host "  Outlook MSI -> $msi  ($msiMb)" -ForegroundColor Green

@@ -31,3 +31,6 @@ assistant/ocu/
 assistant/*.spec
 installer/Output/
 outlook_addin/*.dll
+
+# WiX v3 toolset binaries (downloaded locally for the MSI build)
+installer/wix3/
