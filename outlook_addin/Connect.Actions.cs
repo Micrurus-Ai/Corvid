@@ -108,7 +108,7 @@ namespace Axon.OutlookAddin
                 ? "Write the reply in the SAME language as the email."
                 : "Write the ENTIRE reply (greeting, message, and sign-off) in " + lang + ", regardless of the email's language.";
             string tone = MyToneGuide();
-            string toneLine = string.IsNullOrEmpty(tone) ? "" : " Match the user's personal writing style:\n" + tone + "\n";
+            string toneLine = string.IsNullOrEmpty(tone) ? "" : " IMPORTANT: write in the USER'S OWN VOICE, following this style profile exactly — same greeting, sign-off, vocabulary, recurring phrases, punctuation and level of formality, so it reads as if the user wrote it themselves:\n" + tone + "\n";
             return how + " Begin with an appropriate greeting addressed to the sender by first name, and end " +
                    "with a courteous sign-off" + (string.IsNullOrWhiteSpace(me) ? "" : " from " + me) + ". " +
                    langLine + toneLine + " Use a natural tone. Output ONLY the reply text itself (greeting, " +
@@ -333,36 +333,38 @@ namespace Axon.OutlookAddin
                 }
                 if (string.IsNullOrEmpty(draft)) { Ui.Notify("Couldn't write the email (model unavailable).", "Axon intelligence"); return; }
 
-                // Consume the leading "To:" / "Subject:" header lines; the rest is the body.
-                string to = null, subject = null;
+                // Parse the leading To/Cc/Bcc/Subject headers — allowing blank lines BETWEEN them —
+                // then the body is everything after the last header line.
+                string to = null, cc = null, bcc = null, subject = null;
                 var lines = draft.Replace("\r\n", "\n").Split('\n');
-                int bstart = 0;
-                for (; bstart < lines.Length; bstart++)
+                int lastHeader = -1;
+                int scanTo = Math.Min(lines.Length, 12);
+                for (int i = 0; i < scanTo; i++)
                 {
-                    string ln = lines[bstart].Trim();
-                    if (ln.Length == 0) { if (to != null || subject != null) { bstart++; break; } continue; }
-                    if (to == null && ln.StartsWith("To:", StringComparison.OrdinalIgnoreCase)) { to = ln.Substring(3).Trim(); continue; }
-                    if (subject == null && ln.StartsWith("Subject:", StringComparison.OrdinalIgnoreCase)) { subject = ln.Substring(8).Trim(); continue; }
-                    break;   // first non-header line -> body starts here
+                    string ln = lines[i].Trim();
+                    if (ln.Length == 0) continue;   // skip blank lines between headers
+                    if (to == null && ln.StartsWith("To:", StringComparison.OrdinalIgnoreCase)) { to = ln.Substring(3).Trim(); lastHeader = i; continue; }
+                    if (cc == null && ln.StartsWith("Cc:", StringComparison.OrdinalIgnoreCase)) { cc = ln.Substring(3).Trim(); lastHeader = i; continue; }
+                    if (bcc == null && ln.StartsWith("Bcc:", StringComparison.OrdinalIgnoreCase)) { bcc = ln.Substring(4).Trim(); lastHeader = i; continue; }
+                    if (subject == null && ln.StartsWith("Subject:", StringComparison.OrdinalIgnoreCase)) { subject = ln.Substring(8).Trim(); lastHeader = i; continue; }
+                    break;   // a real content line -> headers are done
                 }
+                int bstart = lastHeader + 1;
+                while (bstart < lines.Length && lines[bstart].Trim().Length == 0) bstart++;   // skip blank(s) after headers
                 var bodySb = new System.Text.StringBuilder();
                 for (int j = bstart; j < lines.Length; j++) bodySb.AppendLine(lines[j]);
                 string body = bodySb.ToString().Trim();
                 if (string.IsNullOrEmpty(body)) body = draft;   // fallback if no headers were found
 
-                if (!string.IsNullOrEmpty(to))
-                {
-                    try
-                    {
-                        string curTo = (string)item.To;
-                        if (string.IsNullOrWhiteSpace(curTo))
-                        {
-                            item.To = to;
-                            try { item.Recipients.ResolveAll(); } catch { }   // resolve the name to an address
-                        }
-                    }
-                    catch { }
-                }
+                // Add To / Cc / Bcc as proper Recipients and resolve each against the address book
+                // (GAL + Contacts). Adding + Resolve() per recipient is far more reliable than setting
+                // the .To string and calling ResolveAll.
+                to = StripNone(to); cc = StripNone(cc); bcc = StripNone(bcc);
+                bool anyRecip = false;
+                anyRecip |= AddRecipients(item, to, 1);    // olTo
+                anyRecip |= AddRecipients(item, cc, 2);    // olCC
+                anyRecip |= AddRecipients(item, bcc, 3);   // olBCC
+                if (anyRecip) { try { item.Recipients.ResolveAll(); } catch { } try { item.Save(); } catch { } }
                 if (!string.IsNullOrEmpty(subject))
                 {
                     try { string cur = (string)item.Subject; if (string.IsNullOrWhiteSpace(cur)) item.Subject = subject; } catch { }
@@ -381,20 +383,258 @@ namespace Axon.OutlookAddin
             catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
         }
 
+        // Add each name/address (';'-separated) to the compose item as a recipient of the given Outlook
+        // type (1=To, 2=Cc, 3=Bcc) and resolve it against the address book so a bare NAME becomes a real
+        // address. Returns true if any were added.
+        private bool AddRecipients(dynamic item, string names, int type)
+        {
+            if (string.IsNullOrWhiteSpace(names)) return false;
+            bool added = false;
+            foreach (var raw in names.Split(';'))
+            {
+                string nm = raw.Trim();
+                if (nm.Length == 0) continue;
+                try
+                {
+                    dynamic r = item.Recipients.Add(nm);
+                    r.Type = type;
+                    try { r.Resolve(); } catch { }
+                    bool ok = false; try { ok = (bool)r.Resolved; } catch { }
+                    // A bare name Outlook couldn't resolve (e.g. a first name) -> look it up in Contacts.
+                    if (!ok && nm.IndexOf('@') < 0)
+                    {
+                        string email = LookupContactEmail(nm);
+                        if (!string.IsNullOrEmpty(email))
+                        {
+                            try { r.Delete(); } catch { }
+                            try { dynamic r2 = item.Recipients.Add(email); r2.Type = type; try { r2.Resolve(); } catch { } } catch { }
+                        }
+                    }
+                    added = true;
+                }
+                catch { }
+            }
+            return added;
+        }
+
+        // Resolve a bare name to an email. Prefers an address the user has ACTUALLY corresponded with
+        // (Sent/Inbox history), then their Contacts, then the company directory (GAL).
+        private string LookupContactEmail(string name)
+        {
+            try { string h = LookupFromHistory(name); if (!string.IsNullOrEmpty(h)) return h; } catch { }
+            try
+            {
+                dynamic app = _app; if (app == null) return "";
+                dynamic items = app.GetNamespace("MAPI").GetDefaultFolder(10).Items;   // olFolderContacts
+                string q = name.Replace("'", "''");
+                foreach (var filter in new[] { "[FirstName] = '" + q + "'", "[FullName] = '" + q + "'", "[CompanyName] = '" + q + "'" })
+                {
+                    try { string e = ContactEmail(items.Restrict(filter).GetFirst()); if (!string.IsNullOrEmpty(e)) return e; } catch { }
+                }
+                // fallback: scan Contacts for a first-name or full-name match
+                dynamic it = null; try { it = items.GetFirst(); } catch { }
+                int n = 0;
+                while (it != null && n < 3000)
+                {
+                    try
+                    {
+                        string first = ""; try { first = (string)it.FirstName; } catch { }
+                        string full = ""; try { full = (string)it.FullName; } catch { }
+                        if (string.Equals(first, name, StringComparison.OrdinalIgnoreCase) ||
+                            (!string.IsNullOrEmpty(full) && full.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0))
+                        { string e = ContactEmail(it); if (!string.IsNullOrEmpty(e)) return e; }
+                    }
+                    catch { }
+                    try { it = items.GetNext(); } catch { it = null; }
+                    n++;
+                }
+
+                // Also search the company directory (GAL) — this is where colleagues usually live.
+                string g = LookupGalEmail(app, name);
+                if (!string.IsNullOrEmpty(g)) return g;
+            }
+            catch { }
+            return "";
+        }
+
+        // Search the Global Address List for a person whose name matches, and return their SMTP address.
+        private string LookupGalEmail(dynamic app, string name)
+        {
+            try
+            {
+                dynamic entries = app.GetNamespace("MAPI").GetGlobalAddressList().AddressEntries;
+                int count = 0; try { count = (int)entries.Count; } catch { }
+                string exact = "", partial = "";
+                for (int i = 1; i <= count && i <= 5000; i++)
+                {
+                    dynamic ae = null; try { ae = entries[i]; } catch { }
+                    if (ae == null) continue;
+                    string enm = ""; try { enm = (string)ae.Name; } catch { }
+                    if (string.IsNullOrEmpty(enm)) continue;
+                    if (string.Equals(enm, name, StringComparison.OrdinalIgnoreCase))
+                    { string e = ExchangeSmtp(ae); if (!string.IsNullOrEmpty(e)) return e; }
+                    if (partial == "" && (enm.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0
+                         || enm.Split(' ')[0].Equals(name, StringComparison.OrdinalIgnoreCase)))
+                        partial = ExchangeSmtp(ae);
+                }
+                return partial;
+            }
+            catch { return ""; }
+        }
+
+        private static string ExchangeSmtp(dynamic ae)
+        {
+            try { dynamic ex = ae.GetExchangeUser(); if (ex != null) { string s = (string)ex.PrimarySmtpAddress; if (!string.IsNullOrEmpty(s) && s.IndexOf('@') > 0) return s; } } catch { }
+            try { string a = (string)ae.Address; if (!string.IsNullOrEmpty(a) && a.IndexOf('@') > 0) return a; } catch { }
+            return "";
+        }
+
+        private static string ContactEmail(dynamic c)
+        {
+            if (c == null) return "";
+            try { string e = (string)c.Email1Address; if (!string.IsNullOrEmpty(e) && e.IndexOf('@') > 0) return e; } catch { }
+            try { string e = (string)c.Email2Address; if (!string.IsNullOrEmpty(e) && e.IndexOf('@') > 0) return e; } catch { }
+            return "";
+        }
+
+        // Find the address the user has actually corresponded with for this name: scan recent Sent
+        // (people they email) and Inbox (people who email them), tally SMTP addresses whose display
+        // name matches, and return the most-used one. This beats a blind directory guess.
+        private string LookupFromHistory(string name)
+        {
+            try
+            {
+                dynamic app = _app; if (app == null) return "";
+                dynamic ns = app.GetNamespace("MAPI");
+                var tally = new System.Collections.Generic.Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                // Sent: recipients I send to (weighted higher — it's who I choose to write).
+                try
+                {
+                    dynamic items = ns.GetDefaultFolder(5).Items;   // olFolderSentMail
+                    try { items.Sort("[SentOn]", true); } catch { }
+                    dynamic m = null; try { m = items.GetFirst(); } catch { }
+                    int n = 0;
+                    while (m != null && n < 150)
+                    {
+                        try
+                        {
+                            if ((int)m.Class == 43)
+                            {
+                                dynamic recips = m.Recipients; int rc = 0; try { rc = (int)recips.Count; } catch { }
+                                for (int i = 1; i <= rc; i++)
+                                {
+                                    dynamic r = null; try { r = recips[i]; } catch { }
+                                    if (r == null) continue;
+                                    string rn = ""; try { rn = (string)r.Name; } catch { }
+                                    string ra = ""; try { ra = (string)r.Address; } catch { }   // cheap: SMTP or EX DN
+                                    bool match = (!string.IsNullOrEmpty(rn) && rn.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0)
+                                              || (!string.IsNullOrEmpty(ra) && ra.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0);
+                                    if (match)
+                                    {
+                                        string e = SmtpFromRecipient(r);
+                                        if (!string.IsNullOrEmpty(e)) tally[e] = (tally.ContainsKey(e) ? tally[e] : 0) + 2;
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                        try { m = items.GetNext(); } catch { m = null; }
+                        n++;
+                    }
+                }
+                catch { }
+
+                // Inbox: senders who write to me.
+                try
+                {
+                    dynamic items = ns.GetDefaultFolder(6).Items;   // olFolderInbox
+                    try { items.Sort("[ReceivedTime]", true); } catch { }
+                    dynamic m = null; try { m = items.GetFirst(); } catch { }
+                    int n = 0;
+                    while (m != null && n < 150)
+                    {
+                        try
+                        {
+                            if ((int)m.Class == 43)
+                            {
+                                string sn = ""; try { sn = (string)m.SenderName; } catch { }
+                                string sa = ""; try { sa = (string)m.SenderEmailAddress; } catch { }
+                                bool match = (!string.IsNullOrEmpty(sn) && sn.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0)
+                                          || (!string.IsNullOrEmpty(sa) && sa.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0);
+                                if (match)
+                                {
+                                    string e = SmtpFromSender(m);
+                                    if (!string.IsNullOrEmpty(e)) tally[e] = (tally.ContainsKey(e) ? tally[e] : 0) + 1;
+                                }
+                            }
+                        }
+                        catch { }
+                        try { m = items.GetNext(); } catch { m = null; }
+                        n++;
+                    }
+                }
+                catch { }
+
+                string best = ""; int bestN = 0;
+                foreach (var kv in tally) if (kv.Value > bestN) { best = kv.Key; bestN = kv.Value; }
+                return best;
+            }
+            catch { return ""; }
+        }
+
+        private static string SmtpFromRecipient(dynamic r)
+        {
+            try { string a = (string)r.Address; if (!string.IsNullOrEmpty(a) && a.IndexOf('@') > 0) return a; } catch { }
+            try { return ExchangeSmtp(r.AddressEntry); } catch { }
+            return "";
+        }
+
+        private static string SmtpFromSender(dynamic mail)
+        {
+            try
+            {
+                string t = ""; try { t = (string)mail.SenderEmailType; } catch { }
+                if (string.Equals(t, "EX", StringComparison.OrdinalIgnoreCase))
+                { try { string e = ExchangeSmtp(mail.Sender); if (!string.IsNullOrEmpty(e)) return e; } catch { } }
+                string s = ""; try { s = (string)mail.SenderEmailAddress; } catch { }
+                if (!string.IsNullOrEmpty(s) && s.IndexOf('@') > 0) return s;
+            }
+            catch { }
+            return "";
+        }
+
+        // Drop placeholder values the model sometimes emits for empty recipient fields.
+        private static string StripNone(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return "";
+            string t = s.Trim();
+            string low = t.ToLowerInvariant().Trim('(', ')', '[', ']', '<', '>', '.', ' ');
+            if (low == "" || low == "none" || low == "blank" || low == "n/a" || low == "na" ||
+                low.StartsWith("leave") || low.StartsWith("no ")) return "";
+            return t;
+        }
+
         private string BuildWritePrompt(string instruction, string me, string lang)
         {
             string langLine = string.IsNullOrEmpty(lang)
                 ? "Write the email in the same language the description is written in."
                 : "Write the ENTIRE email in " + lang + ".";
             string tone = MyToneGuide();
-            string toneLine = string.IsNullOrEmpty(tone) ? "" : " Match the user's personal writing style:\n" + tone + "\n";
+            string toneLine = string.IsNullOrEmpty(tone) ? "" : " IMPORTANT: write in the USER'S OWN VOICE, following this style profile exactly — same greeting, sign-off, vocabulary, recurring phrases, punctuation and level of formality, so it reads as if the user wrote it themselves:\n" + tone + "\n";
             return "Write a complete, professional email based on this description from the user:\n" + instruction +
                    "\n\nBegin with an appropriate greeting and end with a courteous sign-off" +
                    (string.IsNullOrWhiteSpace(me) ? "" : " from " + me) + ". " + langLine + toneLine +
-                   " At the very top, output these header lines (each on its own line): " +
-                   "'To: <the recipient's name or email address if the description names one, otherwise leave " +
-                   "it blank>' and 'Subject: <a short, clear subject>'. Then a blank line, then the email body " +
-                   "(greeting addressed to the recipient by first name, message, sign-off). Output only that — no notes.";
+                   " At the very top, output these header lines, each on its own line:\n" +
+                   "To: <main recipient(s)>\n" +
+                   "Cc: <anyone the user asked to copy — include ONLY if the description mentions people to Cc, else omit this line>\n" +
+                   "Bcc: <anyone the user asked to blind-copy — include ONLY if mentioned, else omit this line>\n" +
+                   "Subject: <a short, clear subject>\n" +
+                   "Put the main recipient in To and anyone the user says to 'cc'/'copy' in Cc ONLY (never in To); " +
+                   "'bcc'/'blind copy' goes in Bcc. " +
+                   "For recipients you may write just the person's NAME (e.g. 'Jan Peeters') — do not invent an email " +
+                   "address; Outlook will look it up in the address book. Separate multiple recipients with semicolons. " +
+                   "Then a blank line, then the email body (greeting by first name, message, sign-off). Output only that — no notes.";
         }
 
         public void OnSendLater(object control)

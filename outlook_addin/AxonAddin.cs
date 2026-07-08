@@ -176,14 +176,15 @@ namespace Axon.OutlookAddin
                     return;
                 }
                 string subject = ""; try { subject = (string)mail.Subject; } catch { }
-                string sender = ""; try { sender = (string)mail.SenderName; } catch { }
-                try { string em = (string)mail.SenderEmailAddress; if (!string.IsNullOrEmpty(em)) sender = (sender + " <" + em + ">").Trim(); } catch { }
+                string senderName = ""; try { senderName = (string)mail.SenderName; } catch { }
+                string sender = senderName;
+                try { string em = (string)mail.SenderEmailAddress; if (!string.IsNullOrEmpty(em)) sender = (senderName + " <" + em + ">").Trim(); } catch { }
                 string body = ""; try { body = (string)mail.Body; } catch { }
                 // Show the picker IMMEDIATELY; fetch AI suggestions on a background thread and fill them in.
                 var dlg = new FolderPicker(subject, folders);
                 var worker = new System.Threading.Thread(() =>
                 {
-                    Filing fil = SuggestFiling(subject, sender, body, folders);
+                    Filing fil = SuggestFiling(subject, sender, senderName, body, folders);
                     dlg.SetSuggestions(fil.matches, fil.newFolder);
                 });
                 worker.IsBackground = true;
@@ -266,14 +267,64 @@ namespace Axon.OutlookAddin
         // or any local server that speaks the same protocol (Ollama, vLLM, LM Studio, LocalAI, ...),
         // so the same add-in works for cloud or fully on-site deployments — only the config differs.
         // If the API is unreachable the picker still lists every folder; only AI ranking is skipped.
-        private Filing SuggestFiling(string subject, string sender, string body, string[] folders)
+        private Filing SuggestFiling(string subject, string sender, string senderName, string body, string[] folders)
         {
             var result = new Filing();
             try { TrySuggestViaApi(subject, sender, body, folders, result); } catch { }
+
+            // Strongest signal: folders where this sender's emails ALREADY live (where the user has filed
+            // them before). Put those on top of the AI's topic guesses; it self-improves as you file.
+            try
+            {
+                var hist = SenderFolders(senderName);
+                if (hist.Count > 0)
+                {
+                    var merged = new System.Collections.Generic.List<string>(hist);
+                    if (result.matches != null)
+                        foreach (var m in result.matches)
+                            if (!merged.Exists(x => string.Equals(x, m, StringComparison.OrdinalIgnoreCase))) merged.Add(m);
+                    if (merged.Count > 5) merged = merged.GetRange(0, 5);
+                    result.matches = merged.ToArray();
+                }
+            }
+            catch { }
+
             // Never leave the 'create new folder' box empty when nothing matched — propose a name.
             if ((result.matches == null || result.matches.Length == 0) && string.IsNullOrWhiteSpace(result.newFolder))
                 result.newFolder = FallbackFolderName(subject, sender);
             return result;
+        }
+
+        // Rank the user's folders by how many emails from this sender they already contain (the user's
+        // own filing history). Returns up to 3 folder display-paths, most-used first.
+        private System.Collections.Generic.List<string> SenderFolders(string senderName)
+        {
+            var ranked = new System.Collections.Generic.List<string>();
+            try
+            {
+                if (string.IsNullOrWhiteSpace(senderName) || _folderMap == null || _folderMap.Count == 0) return ranked;
+                dynamic ns = ((dynamic)_app).GetNamespace("MAPI");
+                string filter = "[SenderName] = '" + senderName.Replace("'", "''") + "'";
+                var counts = new System.Collections.Generic.Dictionary<string, int>();
+                int scanned = 0;
+                foreach (var kv in new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>>(_folderMap))
+                {
+                    if (scanned >= 60) break;   // bound the scan
+                    scanned++;
+                    try
+                    {
+                        dynamic f = ns.GetFolderFromID(kv.Value);
+                        int c = 0; try { c = (int)f.Items.Restrict(filter).Count; } catch { }
+                        if (c > 0) counts[kv.Key] = c;
+                    }
+                    catch { }
+                }
+                var keys = new System.Collections.Generic.List<string>(counts.Keys);
+                keys.Sort((a, b) => counts[b].CompareTo(counts[a]));
+                for (int i = 0; i < keys.Count && i < 3; i++) ranked.Add(keys[i]);
+            }
+            catch { }
+            return ranked;
         }
 
         // Derive a sensible new-folder name from the subject (or sender) when the model doesn't give one.
@@ -293,6 +344,46 @@ namespace Axon.OutlookAddin
             return string.IsNullOrWhiteSpace(s) ? "New folder" : s;
         }
 
+        // Describe each folder for the model as its path + a few recent subjects (what actually lives
+        // in it), so it can match on folder PURPOSE, not just the name. Bounded so it stays responsive.
+        private string FolderSamples(string[] folders)
+        {
+            var sb = new System.Text.StringBuilder();
+            dynamic ns = null; try { ns = ((dynamic)_app).GetNamespace("MAPI"); } catch { }
+            int sampled = 0;
+            foreach (var path in folders)
+            {
+                sb.Append("- ").Append(path).Append("\n");
+                if (ns == null || sampled >= 40 || _folderMap == null || !_folderMap.ContainsKey(path)) continue;
+                sampled++;
+                try
+                {
+                    dynamic items = ns.GetFolderFromID(_folderMap[path]).Items;
+                    try { items.Sort("[ReceivedTime]", true); } catch { }
+                    var subs = new System.Collections.Generic.List<string>();
+                    dynamic m = null; try { m = items.GetFirst(); } catch { }
+                    int k = 0;
+                    while (m != null && subs.Count < 3 && k < 12)
+                    {
+                        k++;
+                        try
+                        {
+                            if ((int)m.Class == 43)
+                            {
+                                string s = ""; try { s = (string)m.Subject; } catch { }
+                                if (!string.IsNullOrWhiteSpace(s)) { s = s.Trim(); if (s.Length > 60) s = s.Substring(0, 60); subs.Add(s); }
+                            }
+                        }
+                        catch { }
+                        try { m = items.GetNext(); } catch { m = null; }
+                    }
+                    if (subs.Count > 0) sb.Append("    recent: ").Append(string.Join("; ", subs.ToArray())).Append("\n");
+                }
+                catch { }
+            }
+            return sb.ToString();
+        }
+
         private bool TrySuggestViaApi(string subject, string sender, string body, string[] folders, Filing result)
         {
             var js = new System.Web.Script.Serialization.JavaScriptSerializer();
@@ -301,15 +392,17 @@ namespace Axon.OutlookAddin
             string prompt =
                 "You are filing an email into one of the user's Outlook folders.\n\n" +
                 "Email\n  Subject: " + subject + "\n  From: " + sender + "\n  Body:\n" + b + "\n\n" +
-                "The user's folders (name, with full path for nested ones):\n" + js.Serialize(folders) + "\n\n" +
-                "READ THE BODY carefully to understand what the email is really about — the subject alone is not " +
-                "enough. Decide based on the email's actual TOPIC and WHO it is from. Pick the folder whose name/path " +
-                "most closely matches that topic; the sender's company/domain is a strong hint. List the " +
-                "best-fitting folders first (up to 5), but ONLY include a folder that is a genuinely good fit " +
-                "(do not pad the list). If none clearly fit, leave matches empty and you MUST propose a short " +
-                "new_folder name based on the email's topic or sender — never leave both matches and new_folder empty.\n" +
-                "Reply with ONLY JSON: {\"matches\": [up to 5 folder names copied EXACTLY from the list, best " +
-                "first], \"new_folder\": \"a short (1-3 word) new folder name; REQUIRED whenever matches is empty\"}";
+                "The user's folders (each '- ' line is a folder path; 'recent:' shows a few subjects already " +
+                "filed there, so you can tell what belongs in it):\n" + FolderSamples(folders) + "\n" +
+                "READ THE BODY to understand what the email is really about — the subject alone is not enough. " +
+                "Then pick the folder whose PURPOSE fits, judging from BOTH its path AND the kind of emails already " +
+                "in it (the 'recent:' samples), plus who the email is from (the sender's company/domain is a strong " +
+                "hint). List the best-fitting folders first (up to 5), ONLY genuinely good fits (do not pad). If none " +
+                "clearly fit, leave matches empty and you MUST propose a short new_folder name based on the topic or " +
+                "sender — never leave both empty.\n" +
+                "matches must be folder paths copied EXACTLY from the '- ' lines (do NOT include the 'recent:' text).\n" +
+                "Reply with ONLY JSON: {\"matches\": [up to 5 exact folder paths, best first], " +
+                "\"new_folder\": \"a short (1-3 word) new folder name; REQUIRED whenever matches is empty\"}";
             string text = ModelComplete(prompt, 0);
             if (string.IsNullOrEmpty(text)) return false;
             var mt = System.Text.RegularExpressions.Regex.Match(text, "\\{[\\s\\S]*\\}");
