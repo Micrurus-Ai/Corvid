@@ -40,8 +40,8 @@ namespace Axon.OutlookAddin
         public void OnConnection(object Application, ext_ConnectMode ConnectMode, object AddInInst, ref Array custom) { _app = Application; }
         public void OnDisconnection(ext_DisconnectMode RemoveMode, ref Array custom) { _app = null; }
         public void OnAddInsUpdate(ref Array custom) { }
-        public void OnStartupComplete(ref Array custom) { }
-        public void OnBeginShutdown(ref Array custom) { }
+        public void OnStartupComplete(ref Array custom) { StartReminderService(); }
+        public void OnBeginShutdown(ref Array custom) { try { if (_reminderTimer != null) _reminderTimer.Stop(); } catch { } }
 
         // --- IRibbonExtensibility ---
         public string GetCustomUI(string RibbonID)
@@ -90,13 +90,15 @@ namespace Axon.OutlookAddin
                    "<button id='axonAttach_" + idMso + "' label='Forward as attachment' getImage='GetAttachImage' onAction='OnAttachEmail'/>" +
                    "<button id='axonMove_" + idMso + "' label='Move with Axon' getImage='GetMoveImage' onAction='OnFile'/>" +
                    "<button id='axonDownload_" + idMso + "' label='Download with Axon' getImage='GetDownloadImage' onAction='OnDownload'/>" +
+                   "<menuSeparator id='axonSep2_" + idMso + "'/>" +
+                   "<button id='axonSettings_" + idMso + "' label='Axon Settings' getImage='GetSettingsImage' onAction='OnSettings'/>" +
                    "</contextMenu>";
         }
 
 
         // --- custom ribbon image (the Axon-branded Move icon, distinct from Outlook's built-ins) ---
         private System.Drawing.Image _moveIcon, _downloadIcon, _summarizeIcon, _replyIcon, _scheduleIcon,
-                                     _followUpIcon, _sendLaterIcon, _writeIcon, _attachIcon;
+                                     _followUpIcon, _sendLaterIcon, _writeIcon, _attachIcon, _settingsIcon;
 
         private System.Drawing.Image LoadIcon(string file, ref System.Drawing.Image cache)
         {
@@ -152,6 +154,11 @@ namespace Axon.OutlookAddin
         public stdole.IPictureDisp GetAttachImage(object control)
         {
             try { return RibbonImage.Get(LoadIcon("axon-attach.png", ref _attachIcon)); } catch { return null; }
+        }
+
+        public stdole.IPictureDisp GetSettingsImage(object control)
+        {
+            try { return RibbonImage.Get(LoadIcon("axon-settings.png", ref _settingsIcon)); } catch { return null; }
         }
 
         // --- ribbon button callbacks (Office invokes these by name via IDispatch) ---
@@ -263,7 +270,27 @@ namespace Axon.OutlookAddin
         {
             var result = new Filing();
             try { TrySuggestViaApi(subject, sender, body, folders, result); } catch { }
+            // Never leave the 'create new folder' box empty when nothing matched — propose a name.
+            if ((result.matches == null || result.matches.Length == 0) && string.IsNullOrWhiteSpace(result.newFolder))
+                result.newFolder = FallbackFolderName(subject, sender);
             return result;
+        }
+
+        // Derive a sensible new-folder name from the subject (or sender) when the model doesn't give one.
+        private static string FallbackFolderName(string subject, string sender)
+        {
+            string s = (subject ?? "").Trim();
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"^((RE|FW|FWD|AW|VS|TR)\s*:\s*)+", "",
+                                                             System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+            foreach (var sep in new[] { " | ", " - ", " – ", " — ", ": " })
+            { int i = s.IndexOf(sep); if (i > 2) { s = s.Substring(0, i).Trim(); break; } }
+            var words = s.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length > 4) s = string.Join(" ", words, 0, 4);
+            if (string.IsNullOrWhiteSpace(s)) s = (sender ?? "").Trim();
+            foreach (var c in Path.GetInvalidFileNameChars()) s = s.Replace(c.ToString(), "");
+            s = s.Trim();
+            if (s.Length > 40) s = s.Substring(0, 40).Trim();
+            return string.IsNullOrWhiteSpace(s) ? "New folder" : s;
         }
 
         private static string _apiBase, _apiKey, _model;
@@ -399,17 +426,19 @@ namespace Axon.OutlookAddin
         {
             var js = new System.Web.Script.Serialization.JavaScriptSerializer();
             string b = body ?? "";
-            if (b.Length > 1500) b = b.Substring(0, 1500);
+            if (b.Length > 4000) b = b.Substring(0, 4000);
             string prompt =
                 "You are filing an email into one of the user's Outlook folders.\n\n" +
-                "Email\n  Subject: " + subject + "\n  From: " + sender + "\n  Body (truncated):\n" + b + "\n\n" +
+                "Email\n  Subject: " + subject + "\n  From: " + sender + "\n  Body:\n" + b + "\n\n" +
                 "The user's folders (name, with full path for nested ones):\n" + js.Serialize(folders) + "\n\n" +
-                "Decide based on what the email is ABOUT and WHO it is from. Pick the folder whose name/path " +
+                "READ THE BODY carefully to understand what the email is really about — the subject alone is not " +
+                "enough. Decide based on the email's actual TOPIC and WHO it is from. Pick the folder whose name/path " +
                 "most closely matches that topic; the sender's company/domain is a strong hint. List the " +
                 "best-fitting folders first (up to 5), but ONLY include a folder that is a genuinely good fit " +
-                "(do not pad the list). If none clearly fit, leave matches empty and propose a short new folder.\n" +
+                "(do not pad the list). If none clearly fit, leave matches empty and you MUST propose a short " +
+                "new_folder name based on the email's topic or sender — never leave both matches and new_folder empty.\n" +
                 "Reply with ONLY JSON: {\"matches\": [up to 5 folder names copied EXACTLY from the list, best " +
-                "first], \"new_folder\": \"a short (1-3 word) new folder name if nothing fits, else an empty string\"}";
+                "first], \"new_folder\": \"a short (1-3 word) new folder name; REQUIRED whenever matches is empty\"}";
             string text = ModelComplete(prompt, 0);
             if (string.IsNullOrEmpty(text)) return false;
             var mt = System.Text.RegularExpressions.Regex.Match(text, "\\{[\\s\\S]*\\}");
@@ -546,11 +575,11 @@ namespace Axon.OutlookAddin
                     {
                         var info = ExtractArchiveInfo(mail, cfg);
                         string code = Field(info, "code"), company = Field(info, "company"),
-                               type = Field(info, "type"), year = Field(info, "year"), sap = Field(info, "sap");
+                               category = Field(info, "category"), year = Field(info, "year"), sap = Field(info, "sap");
                         if (string.IsNullOrWhiteSpace(year)) year = DateTime.Now.Year.ToString();
                         string sender = ""; try { sender = (string)mail.SenderName; } catch { }
                         string body = ""; try { body = (string)mail.Body; } catch { }
-                        string baseDir = ResolveBaseDir(cfg, type, code);
+                        string baseDir = ResolveBaseDir(cfg, category, code);
                         _archiveBaseDir = baseDir;
                         _archiveCompany = company;
                         System.Collections.Generic.List<string> matches, existing, reasons; string newRel;
@@ -571,7 +600,7 @@ namespace Axon.OutlookAddin
                         string rel = !string.IsNullOrEmpty(picker.CreateFolder) ? picker.CreateFolder : picker.Chosen;
                         if (!string.IsNullOrEmpty(rel))
                         {
-                            string root = _archiveBaseDir ?? cfg.ClientBase;
+                            string root = _archiveBaseDir ?? cfg.PathFor("");
                             string abs = Path.IsPathRooted(rel) ? rel : Path.Combine(root, rel);
                             if (!string.IsNullOrWhiteSpace(cfg.Subfolder)) abs = Path.Combine(abs, cfg.Subfolder);
                             SaveEmailPerMode(mail, abs, subject, cfg.SaveMode);
@@ -587,10 +616,24 @@ namespace Axon.OutlookAddin
         // ---- Email-archive: read config, extract entities, suggest folders, save per mode ----
         private class ArchiveCfg
         {
-            public string ClientBase = "", SupplierBase = "", SaveMode = "both", Subfolder = "";
+            public string SaveMode = "both", Subfolder = "";
+            // Named base folders the user defined (label -> path), in order. Not hardcoded to
+            // client/supplier — the user can add any labels, and as many as they want.
+            public System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> Bases =
+                new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>>();
             public System.Collections.Generic.Dictionary<string, string> Codes =
                 new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            public bool Ready { get { return !string.IsNullOrWhiteSpace(ClientBase); } }
+            public bool Ready { get { foreach (var b in Bases) if (!string.IsNullOrWhiteSpace(b.Value)) return true; return false; } }
+            public string[] Labels
+            {
+                get { var l = new System.Collections.Generic.List<string>(); foreach (var b in Bases) if (!string.IsNullOrWhiteSpace(b.Value)) l.Add(b.Key); return l.ToArray(); }
+            }
+            public string PathFor(string label)
+            {
+                foreach (var b in Bases) if (string.Equals(b.Key, label, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(b.Value)) return b.Value;
+                foreach (var b in Bases) if (!string.IsNullOrWhiteSpace(b.Value)) return b.Value;   // fallback: first defined
+                return "";
+            }
         }
 
         private ArchiveCfg ReadArchiveCfg()
@@ -604,8 +647,23 @@ namespace Axon.OutlookAddin
                 var js = new System.Web.Script.Serialization.JavaScriptSerializer();
                 var d = js.DeserializeObject(File.ReadAllText(p)) as System.Collections.Generic.Dictionary<string, object>;
                 if (d == null) return cfg;
-                if (d.ContainsKey("client_base") && d["client_base"] != null) cfg.ClientBase = d["client_base"].ToString();
-                if (d.ContainsKey("supplier_base") && d["supplier_base"] != null) cfg.SupplierBase = d["supplier_base"].ToString();
+                var basesArr = d.ContainsKey("bases") ? d["bases"] as object[] : null;
+                if (basesArr != null)
+                    foreach (var o in basesArr)
+                    {
+                        var bd = o as System.Collections.Generic.Dictionary<string, object>;
+                        if (bd == null) continue;
+                        string nm = bd.ContainsKey("name") && bd["name"] != null ? bd["name"].ToString().Trim() : "";
+                        string pth = bd.ContainsKey("path") && bd["path"] != null ? bd["path"].ToString().Trim() : "";
+                        if (!string.IsNullOrWhiteSpace(nm)) cfg.Bases.Add(new System.Collections.Generic.KeyValuePair<string, string>(nm, pth));
+                    }
+                if (cfg.Bases.Count == 0)   // backward-compat: old fixed client_base / supplier_base
+                {
+                    string cb = d.ContainsKey("client_base") && d["client_base"] != null ? d["client_base"].ToString().Trim() : "";
+                    string sb = d.ContainsKey("supplier_base") && d["supplier_base"] != null ? d["supplier_base"].ToString().Trim() : "";
+                    if (!string.IsNullOrWhiteSpace(cb)) cfg.Bases.Add(new System.Collections.Generic.KeyValuePair<string, string>("Clients", cb));
+                    if (!string.IsNullOrWhiteSpace(sb)) cfg.Bases.Add(new System.Collections.Generic.KeyValuePair<string, string>("Suppliers", sb));
+                }
                 if (d.ContainsKey("save_mode") && d["save_mode"] != null) cfg.SaveMode = d["save_mode"].ToString();
                 if (d.ContainsKey("default_subfolder") && d["default_subfolder"] != null) cfg.Subfolder = d["default_subfolder"].ToString();
                 var cc = d.ContainsKey("country_codes") ? d["country_codes"] as System.Collections.Generic.Dictionary<string, object> : null;
@@ -621,16 +679,18 @@ namespace Axon.OutlookAddin
             string sender = ""; try { sender = (string)mail.SenderName; } catch { }
             string senderEmail = ""; try { senderEmail = (string)mail.SenderEmailAddress; } catch { }
             string body = ""; try { body = (string)mail.Body; } catch { }
-            if (body.Length > 1500) body = body.Substring(0, 1500);
+            if (body.Length > 4000) body = body.Substring(0, 4000);
             var js = new System.Web.Script.Serialization.JavaScriptSerializer();
             string mapJson = js.Serialize(cfg.Codes);
+            string labels = js.Serialize(cfg.Labels);
             string prompt =
-                "Read this email and reply with ONLY JSON: {\"code\":\"\",\"company\":\"\",\"type\":\"client|supplier\"," +
-                "\"year\":\"\",\"sap\":\"\"}. Determine the sender's COUNTRY from the email domain, any phone numbers " +
+                "Read this email and reply with ONLY JSON: {\"category\":\"\",\"code\":\"\",\"company\":\"\"," +
+                "\"year\":\"\",\"sap\":\"\"}. \"category\" = which ONE of the user's archive folders this email belongs in " +
+                "(choose exactly one label from this list, or empty if none clearly fits): " + labels + ". " +
+                "Determine the sender's COUNTRY from the email domain, any phone numbers " +
                 "(+32 Belgium, +49 Germany, +31 Netherlands, +33 France, etc.), and address, then set \"code\" using this " +
-                "Country->code map: " + mapJson + " (empty if the country isn't in the map). \"company\" = the client/supplier " +
-                "company name. \"type\" = 'client' if they buy from us (an order to us) or 'supplier' if they sell to us " +
-                "(their quote/invoice). \"year\" = a 4-digit year from the email, else the current year. \"sap\" = the order/" +
+                "Country->code map: " + mapJson + " (empty if the country isn't in the map). \"company\" = the sender's " +
+                "company name. \"year\" = a 4-digit year from the email, else the current year. \"sap\" = the order/" +
                 "SAP number in the subject if there is one, else empty.\n\nFrom: " + sender + " <" + senderEmail + ">\n" +
                 "Subject: " + subject + "\n\n" + body;
             string text = ModelComplete(prompt, 0);
@@ -640,10 +700,10 @@ namespace Axon.OutlookAddin
             catch { return null; }
         }
 
-        private string ResolveBaseDir(ArchiveCfg cfg, string type, string code)
+        private string ResolveBaseDir(ArchiveCfg cfg, string category, string code)
         {
-            string bas = ((type == "supplier") && !string.IsNullOrWhiteSpace(cfg.SupplierBase)) ? cfg.SupplierBase : cfg.ClientBase;
-            bas = bas.TrimEnd('\\', '/');
+            string bas = cfg.PathFor(category);
+            bas = (bas ?? "").TrimEnd('\\', '/');
             if (!string.IsNullOrWhiteSpace(code))
             {
                 var codeVals = new System.Collections.Generic.HashSet<string>(cfg.Codes.Values, StringComparer.OrdinalIgnoreCase);
@@ -737,7 +797,7 @@ namespace Axon.OutlookAddin
                         if (r.IndexOf(company, StringComparison.OrdinalIgnoreCase) >= 0) list.Add(r);
                 foreach (var r in existing) { if (list.Count >= 350) break; if (!list.Contains(r)) list.Add(r); }
 
-                string b = body ?? ""; if (b.Length > 1200) b = b.Substring(0, 1200);
+                string b = body ?? ""; if (b.Length > 3000) b = b.Substring(0, 3000);
                 string prompt =
                     "You are filing an email into one of the user's ARCHIVE folders on disk (organised by client, " +
                     "topic and year).\n\nEmail\n  Subject: " + subject + "\n  From: " + sender +
@@ -944,10 +1004,15 @@ namespace Axon.OutlookAddin
             string langLine = string.IsNullOrEmpty(lang)
                 ? "Write the summary in the same language as the email."
                 : "Write the summary in " + lang + ".";
-            return "Summarize this email for a busy reader in PLAIN TEXT only — no markdown, no asterisks, " +
-                "no '#'. Use exactly this layout, with blank lines between sections:\n\nGist: <one sentence>\n\n" +
-                "Key points:\n- <point>\n- <point>\n\nAction: <what the reader should do, or 'None'>\n\n" +
-                langLine + " Keep it tight.\n\nSubject: " + subject + "\n\n" + body;
+            return "Summarize this email THOROUGHLY in PLAIN TEXT only — no markdown, no asterisks, no '#'. " +
+                "Capture all the important information: who is involved, what they are asking or saying, and every " +
+                "specific detail that matters (names, dates, amounts, quantities, order/reference numbers, deadlines, " +
+                "links, attachments, and any questions raised). Do NOT over-compress — it is better to keep a detail " +
+                "than to drop it. Use this layout, with a blank line between sections:\n\n" +
+                "Gist: <2-3 sentences giving the full picture>\n\n" +
+                "Key points:\n- <point>\n- <point>\n- <point>\n(list every meaningful point, one per line — include the specifics)\n\n" +
+                "Action: <what the reader should do, including any deadline or detail, or 'None'>\n\n" +
+                langLine + "\n\nSubject: " + subject + "\n\n" + body;
         }
 
         public void OnReply(object control)
@@ -1406,6 +1471,286 @@ namespace Axon.OutlookAddin
             catch { }
         }
 
+        // --- Reminder service --------------------------------------------------------------------
+        // Fires Follow-up / Send-Later reminders from INSIDE Outlook, so they work even without the
+        // floating dot. Reads the same JSON the add-in writes and uses the SAME 'seen' files as the
+        // dot (keys match), and it stands down if the dot is running — so the two never double-fire.
+        private System.Windows.Forms.Timer _reminderTimer;
+
+        private void StartReminderService()
+        {
+            try
+            {
+                _reminderTimer = new System.Windows.Forms.Timer();
+                _reminderTimer.Interval = 60000;                 // check every minute
+                _reminderTimer.Tick += (o, e) => CheckRemindersSafe();
+                _reminderTimer.Start();
+                var first = new System.Windows.Forms.Timer();    // and once, ~10s after Outlook opens
+                first.Interval = 10000;
+                first.Tick += (o, e) => { first.Stop(); first.Dispose(); CheckRemindersSafe(); };
+                first.Start();
+            }
+            catch { }
+        }
+
+        private void CheckRemindersSafe() { try { CheckReminders(); } catch { } }
+
+        private static bool DotIsRunning()
+        {
+            try { return System.Diagnostics.Process.GetProcessesByName("AxonIntelligence").Length > 0; }
+            catch { return false; }
+        }
+
+        private static string AxonDir()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AxonOutlook");
+        }
+
+        private static System.Collections.Generic.List<System.Collections.Generic.Dictionary<string, object>> LoadArray(string path)
+        {
+            var outList = new System.Collections.Generic.List<System.Collections.Generic.Dictionary<string, object>>();
+            try
+            {
+                if (!File.Exists(path)) return outList;
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var arr = js.DeserializeObject(File.ReadAllText(path)) as object[];
+                if (arr != null)
+                    foreach (var o in arr)
+                    {
+                        var d = o as System.Collections.Generic.Dictionary<string, object>;
+                        if (d != null) outList.Add(d);
+                    }
+            }
+            catch { }
+            return outList;
+        }
+
+        private static System.Collections.Generic.HashSet<string> LoadSeen(string path)
+        {
+            var set = new System.Collections.Generic.HashSet<string>();
+            try
+            {
+                if (!File.Exists(path)) return set;
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var arr = js.DeserializeObject(File.ReadAllText(path)) as object[];
+                if (arr != null) foreach (var o in arr) if (o != null) set.Add(o.ToString());
+            }
+            catch { }
+            return set;
+        }
+
+        private static void SaveSeen(string path, System.Collections.Generic.HashSet<string> set)
+        {
+            try
+            {
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.WriteAllText(path, js.Serialize(new System.Collections.Generic.List<string>(set)));
+            }
+            catch { }
+        }
+
+        private static string F(System.Collections.Generic.Dictionary<string, object> d, string k)
+        {
+            object v; return (d != null && d.TryGetValue(k, out v) && v != null) ? v.ToString() : "";
+        }
+
+        private void CheckReminders()
+        {
+            if (DotIsRunning()) return;   // the dot owns reminders when it's running; avoid duplicates
+            DateTime now = DateTime.Now;
+            string dir = AxonDir();
+
+            // Follow-ups (seen key: id|due, matching the dot).
+            var fItems = LoadArray(Path.Combine(dir, "followups.json"));
+            if (fItems.Count > 0)
+            {
+                string seenPath = Path.Combine(dir, "followups_seen.json");
+                var seen = LoadSeen(seenPath);
+                bool changed = false;
+                foreach (var it in fItems)
+                {
+                    string due = F(it, "due");
+                    string key = F(it, "id") + "|" + due;
+                    if (seen.Contains(key)) continue;
+                    DateTime d;
+                    if (!DateTime.TryParse(due, out d) || d > now) continue;
+                    DateTime created; DateTime.TryParse(F(it, "created"), out created);
+                    if (HasReply(F(it, "id"), created)) { seen.Add(key); changed = true; continue; }
+                    string who = F(it, "who"), subj = F(it, "subject");
+                    ShowReminder("Follow up" + (string.IsNullOrEmpty(who) ? "" : " with " + who),
+                                 string.IsNullOrEmpty(subj) ? "(no subject)" : subj);
+                    seen.Add(key); changed = true;
+                }
+                if (changed) SaveSeen(seenPath, seen);
+            }
+
+            // Scheduled sends (seen keys: to|when|remind and to|when|sent, matching the dot).
+            var sItems = LoadArray(Path.Combine(dir, "scheduled.json"));
+            if (sItems.Count > 0)
+            {
+                string seenPath = Path.Combine(dir, "scheduled_seen.json");
+                var seen = LoadSeen(seenPath);
+                bool changed = false;
+                foreach (var it in sItems)
+                {
+                    string bas = F(it, "to") + "|" + F(it, "when");
+                    string subj = F(it, "subject");
+                    string remindAt = F(it, "remind_at");
+                    if (!string.IsNullOrEmpty(remindAt))
+                    {
+                        string rk = bas + "|remind"; DateTime rt;
+                        if (!seen.Contains(rk) && DateTime.TryParse(remindAt, out rt) && rt <= now)
+                        {
+                            ShowReminder("Axon will send this scheduled email at " + F(it, "when") + ".",
+                                string.IsNullOrEmpty(subj) ? "Scheduled email" : subj);
+                            seen.Add(rk); changed = true;
+                        }
+                    }
+                    string sk = bas + "|sent"; DateTime w;
+                    if (!seen.Contains(sk) && DateTime.TryParse(F(it, "when"), out w) && w <= now)
+                    {
+                        ShowReminder("This scheduled email has now been sent from your Outbox.",
+                            string.IsNullOrEmpty(subj) ? "Scheduled email" : subj);
+                        seen.Add(sk); changed = true;
+                    }
+                }
+                if (changed) SaveSeen(seenPath, seen);
+            }
+        }
+
+        // Best-effort: did a message in this conversation arrive after the follow-up was set?
+        private bool HasReply(string entryId, DateTime created)
+        {
+            if (string.IsNullOrEmpty(entryId)) return false;
+            try
+            {
+                dynamic app = _app; if (app == null) return false;
+                dynamic ns = app.GetNamespace("MAPI");
+                dynamic item = ns.GetItemFromID(entryId);
+                if (item == null) return false;
+                dynamic conv = null; try { conv = item.GetConversation(); } catch { }
+                if (conv == null) return false;
+                dynamic table = conv.GetTable();
+                try { table.Columns.Add("ReceivedTime"); } catch { }
+                while (!(bool)table.EndOfTable)
+                {
+                    dynamic row = table.GetNextRow();
+                    try
+                    {
+                        object rto = row["ReceivedTime"];
+                        if (rto != null && Convert.ToDateTime(rto) > created.AddMinutes(1)) return true;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        // A reliable reminder styled like Outlook's own "1 Reminder" window: light, item in bold,
+        // Dismiss + Snooze. Non-modal + topmost so it's dependable (Outlook's native one is flaky).
+        private void ShowReminder(string kind, string item)
+        {
+            try
+            {
+                var f = new Form
+                {
+                    Text = "1 Reminder",
+                    FormBorderStyle = FormBorderStyle.FixedDialog,
+                    MaximizeBox = false, MinimizeBox = false,
+                    ShowInTaskbar = false, TopMost = true,
+                    BackColor = System.Drawing.Color.White,
+                    Font = new System.Drawing.Font("Segoe UI", 9F),
+                    ClientSize = new System.Drawing.Size(410, 152),
+                    StartPosition = FormStartPosition.CenterScreen
+                };
+                int W = f.ClientSize.Width;
+                f.Controls.Add(new Label
+                {
+                    Text = "🔔", Left = 16, Top = 18, Width = 34, Height = 34,   // 🔔
+                    Font = new System.Drawing.Font("Segoe UI Emoji", 15F),
+                    ForeColor = System.Drawing.Color.FromArgb(198, 118, 28)
+                });
+                f.Controls.Add(new Label
+                {
+                    Text = string.IsNullOrEmpty(item) ? "(no subject)" : item,
+                    Left = 58, Top = 18, Width = W - 74, Height = 24, AutoEllipsis = true,
+                    Font = new System.Drawing.Font("Segoe UI", 10.5F, System.Drawing.FontStyle.Bold),
+                    ForeColor = System.Drawing.Color.FromArgb(28, 28, 28)
+                });
+                f.Controls.Add(new Label
+                {
+                    Text = kind, Left = 58, Top = 46, Width = W - 74, Height = 34, AutoEllipsis = true,
+                    ForeColor = System.Drawing.Color.FromArgb(96, 96, 96)
+                });
+                f.Controls.Add(new Label { Left = 0, Top = 100, Width = W, Height = 1, BackColor = System.Drawing.Color.FromArgb(224, 224, 224) });
+
+                var dismiss = new Button { Text = "Dismiss", Left = W - 16 - 96, Top = 112, Width = 96, Height = 30, FlatStyle = FlatStyle.System };
+                dismiss.Click += (o, e) => { try { f.Close(); } catch { } };
+                var snooze = new Button { Text = "Snooze 5 min", Left = W - 16 - 96 - 8 - 116, Top = 112, Width = 116, Height = 30, FlatStyle = FlatStyle.System };
+                snooze.Click += (o, e) =>
+                {
+                    try { f.Close(); } catch { }
+                    var re = new System.Windows.Forms.Timer { Interval = 5 * 60 * 1000 };
+                    re.Tick += (o2, e2) => { re.Stop(); re.Dispose(); ShowReminder(kind, item); };
+                    re.Start();
+                };
+                f.Controls.Add(dismiss); f.Controls.Add(snooze);
+                f.AcceptButton = dismiss;
+                f.FormClosed += (o, e) => { try { f.Dispose(); } catch { } };
+                f.Show();
+            }
+            catch { }
+        }
+
+        // --- Settings (standalone add-in has no dot, so it needs its own settings UI) ------------
+        public void OnSettings(object control)
+        {
+            try { using (var f = new SettingsForm(this)) { f.ShowDialog(); } }
+            catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
+        }
+
+        // Read the user's recent Sent mail and derive a writing-style guide (used by Reply / Write).
+        // Runs the same idea as the dot's 'learn tone', but entirely inside the add-in.
+        public string LearnToneFromSent()
+        {
+            try
+            {
+                dynamic app = _app; if (app == null) return "";
+                dynamic ns = app.GetNamespace("MAPI");
+                dynamic sent = ns.GetDefaultFolder(5);   // olFolderSentMail
+                dynamic items = sent.Items;
+                try { items.Sort("[SentOn]", true); } catch { }
+                var sb = new System.Text.StringBuilder();
+                int n = 0;
+                dynamic m = null; try { m = items.GetFirst(); } catch { }
+                while (m != null && n < 25)
+                {
+                    string b = ""; try { b = (string)m.Body; } catch { }
+                    foreach (var mark in new[] { "\r\nFrom:", "\r\nVan:", "\r\nSent:", "-----Original", "-----Oorspronkelijk" })
+                    { int i = b.IndexOf(mark); if (i > 0) { b = b.Substring(0, i); } }
+                    b = (b ?? "").Trim();
+                    if (b.Length >= 20)
+                    {
+                        if (b.Length > 1000) b = b.Substring(0, 1000);
+                        sb.AppendLine("=====EMAIL====="); sb.AppendLine(b); n++;
+                    }
+                    try { m = items.GetNext(); } catch { m = null; }
+                }
+                if (n == 0) return "";
+                string prompt =
+                    "Below are recent emails the USER has SENT (their own outgoing messages). Describe ONLY how the " +
+                    "user writes; ignore any quoted text. Write a concise STYLE GUIDE another writer could follow: " +
+                    "greeting, sign-off, formality/warmth, sentence length, whether they use bullets or emojis, and " +
+                    "which languages they write in. Plain text with '- ' bullets, no Markdown, no asterisks, under " +
+                    "200 words.\n\n" + sb.ToString();
+                string tone = ModelComplete(prompt, 0.2);
+                return (tone ?? "").Replace("*", "").Trim();
+            }
+            catch { return ""; }
+        }
+
         // --- COM (de)registration: add/remove the Outlook add-in registry entry ---
         private const string AddinKey = @"Software\Microsoft\Office\Outlook\AddIns\Axon.OutlookAddin";
 
@@ -1521,11 +1866,254 @@ namespace Axon.OutlookAddin
 
     // Move dialog — suggested folders, create-new-folder, and a searchable list. Opens instantly;
     // suggestions fill in async.
+    // Settings dialog for the standalone add-in (no dot): email-archive rules + writing tone.
+    internal class SettingsForm : Form
+    {
+        private readonly Connect _owner;
+        private TextBox _bases, _sub, _codes, _tone;
+        private ComboBox _mode;
+        private Button _learn;
+
+        public SettingsForm(Connect owner)
+        {
+            _owner = owner;
+            Text = "Axon intelligence — Settings";
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            StartPosition = FormStartPosition.CenterScreen;
+            MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
+            Font = new System.Drawing.Font("Segoe UI", 9.5F);
+            BuildPremiumUi();
+            LoadAll();
+        }
+
+        private static readonly System.Drawing.Color SettingsBg = System.Drawing.Color.White;
+        private static readonly System.Drawing.Color SettingsSurface = System.Drawing.Color.White;
+        private static readonly System.Drawing.Color SettingsBorder = Ui.Line;
+        private static readonly System.Drawing.Color SettingsText = Ui.Ink;
+        private static readonly System.Drawing.Color SettingsMuted = Ui.Muted;
+
+        private void BuildPremiumUi()
+        {
+            ClientSize = new System.Drawing.Size(620, 700);
+            BackColor = SettingsBg;
+            int W = ClientSize.Width, x = 24, lw = W - 48;
+
+            Controls.Add(SettingsTitle("Axon settings", x, 20, lw));
+            Controls.Add(SettingsHint("Email archive and writing tone for the Outlook add-in.", x, 54, lw, 22));
+
+            var archive = SettingsCard(x, 92, lw, 360);
+            Controls.Add(archive);
+            archive.Controls.Add(SettingsSectionTitle("Email archive", 18, 16, lw - 36));
+            archive.Controls.Add(SettingsHint("Define your archive folders by label. Axon reads each email and files it under the matching label.", 18, 42, lw - 36, 42));
+
+            archive.Controls.Add(SettingsFieldLabel("Archive folders", 18, 94, 180));
+            archive.Controls.Add(SettingsHint("One per line:  Label = folder   (e.g. Clients = T:\\IF\\Sales\\AB\\SOP\\)", 150, 95, lw - 190, 20));
+            _bases = SettingsArea(18, 118, lw - 116, 86);
+            archive.Controls.Add(_bases);
+            archive.Controls.Add(SettingsAddFolderBtn(_bases, lw - 92, 118));
+
+            archive.Controls.Add(SettingsFieldLabel("Country to code", 18, 216, 160));
+            archive.Controls.Add(SettingsHint("One per line, e.g. Belgium=AB", 146, 217, lw - 180, 20));
+            _codes = SettingsArea(18, 240, lw - 36, 58);
+            archive.Controls.Add(_codes);
+
+            archive.Controls.Add(SettingsFieldLabel("Save", 18, 326, 46));
+            _mode = new ComboBox { Left = 64, Top = 322, Width = 220, Height = 30, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = System.Drawing.Color.White, ForeColor = SettingsText };
+            _mode.Items.AddRange(new object[] { "Both (email + attachments)", "Email (.msg)", "Attachments only" });
+            archive.Controls.Add(_mode);
+            archive.Controls.Add(SettingsFieldLabel("Default subfolder", 306, 326, 148));
+            _sub = SettingsField(456, 322, lw - 492);
+            archive.Controls.Add(_sub);
+
+            var writing = SettingsCard(x, 468, lw, 170);
+            Controls.Add(writing);
+            writing.Controls.Add(SettingsSectionTitle("Writing tone", 18, 16, lw - 36));
+            writing.Controls.Add(SettingsHint("How Axon writes replies and drafts. Type it, or learn it from your Sent mail.", 18, 42, lw - 36, 28));
+            _tone = SettingsArea(18, 76, lw - 36, 62);
+            writing.Controls.Add(_tone);
+            _learn = SettingsGhostButton("Learn from my Sent emails", 18, 140, 210, 28);
+            _learn.Click += (o, e) => LearnTone();
+            writing.Controls.Add(_learn);
+
+            Controls.Add(SettingsHint("Changes apply after saving.", x, ClientSize.Height - 58, 220, 20));
+            var save = SettingsPrimaryButton("Save", W - 24 - 96, ClientSize.Height - 54, 96, 34);
+            save.Click += (o, e) => { SaveAll(); DialogResult = DialogResult.OK; Close(); };
+            var cancel = SettingsGhostButton("Cancel", save.Left - 10 - 96, ClientSize.Height - 54, 96, 34);
+            cancel.Click += (o, e) => { DialogResult = DialogResult.Cancel; Close(); };
+            Controls.Add(cancel);
+            Controls.Add(save);
+            AcceptButton = save;
+            CancelButton = cancel;
+        }
+
+        private static Panel SettingsCard(int x, int y, int w, int h)
+        { return new Panel { Left = x, Top = y, Width = w, Height = h, BackColor = SettingsSurface, BorderStyle = BorderStyle.FixedSingle }; }
+        private static Label SettingsTitle(string t, int x, int y, int w)
+        { return new Label { Text = t, Left = x, Top = y, Width = w, Height = 34, ForeColor = SettingsText, Font = new System.Drawing.Font("Segoe UI", 16F, System.Drawing.FontStyle.Bold) }; }
+        private static Label SettingsSectionTitle(string t, int x, int y, int w)
+        { return new Label { Text = t, Left = x, Top = y, Width = w, Height = 24, ForeColor = SettingsText, Font = new System.Drawing.Font("Segoe UI", 11F, System.Drawing.FontStyle.Bold) }; }
+        private static Label SettingsFieldLabel(string t, int x, int y, int w)
+        { return new Label { Text = t, Left = x, Top = y, Width = w, Height = 22, ForeColor = SettingsText, Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Bold) }; }
+        private static Label SettingsHint(string t, int x, int y, int w, int h)
+        { return new Label { Text = t, Left = x, Top = y, Width = w, Height = h, ForeColor = SettingsMuted, AutoEllipsis = true, AutoSize = false }; }
+        private static TextBox SettingsField(int x, int y, int w)
+        { return new TextBox { Left = x, Top = y, Width = w, Height = 28, BorderStyle = BorderStyle.FixedSingle, BackColor = System.Drawing.Color.White, ForeColor = SettingsText }; }
+        private static TextBox SettingsArea(int x, int y, int w, int h)
+        { return new TextBox { Left = x, Top = y, Width = w, Height = h, Multiline = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.FixedSingle, BackColor = System.Drawing.Color.White, ForeColor = SettingsText }; }
+        private static Button SettingsPrimaryButton(string text, int x, int y, int w, int h)
+        {
+            var b = new Button { Text = text, Left = x, Top = y, Width = w, Height = h, FlatStyle = FlatStyle.Flat, BackColor = System.Drawing.Color.FromArgb(17, 17, 17), ForeColor = System.Drawing.Color.White, Font = new System.Drawing.Font("Segoe UI", 9.5F, System.Drawing.FontStyle.Bold), Cursor = Cursors.Hand };
+            b.FlatAppearance.BorderSize = 0;
+            b.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(48, 45, 40);
+            return b;
+        }
+        private static Button SettingsGhostButton(string text, int x, int y, int w, int h)
+        {
+            var b = new Button { Text = text, Left = x, Top = y, Width = w, Height = h, FlatStyle = FlatStyle.Flat, BackColor = SettingsSurface, ForeColor = SettingsText, Font = new System.Drawing.Font("Segoe UI", 9.5F), Cursor = Cursors.Hand };
+            b.FlatAppearance.BorderColor = SettingsBorder;
+            b.FlatAppearance.BorderSize = 1;
+            return b;
+        }
+        private Button SettingsBrowseBtn(TextBox target, int x, int y)
+        {
+            var b = SettingsGhostButton("Browse...", x, y, 94, 28);
+            b.Click += (o, e) => { using (var fb = new FolderBrowserDialog()) { if (fb.ShowDialog() == DialogResult.OK) target.Text = fb.SelectedPath; } };
+            return b;
+        }
+        private Button SettingsAddFolderBtn(TextBox target, int x, int y)
+        {
+            var b = SettingsGhostButton("Add...", x, y, 74, 28);
+            b.Click += (o, e) =>
+            {
+                using (var fb = new FolderBrowserDialog())
+                {
+                    if (fb.ShowDialog() == DialogResult.OK)
+                    {
+                        string cur = target.Text ?? "";
+                        if (cur.Length > 0 && !cur.EndsWith("\n")) cur += "\r\n";
+                        target.Text = cur + "Label = " + fb.SelectedPath;
+                    }
+                }
+            };
+            return b;
+        }
+
+        private static string Dir() { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AxonOutlook"); }
+        private static string Get(System.Collections.Generic.Dictionary<string, object> d, string k) { object v; return (d != null && d.TryGetValue(k, out v) && v != null) ? v.ToString() : ""; }
+        private static TextBox Tb(int x, int y, int w) { return new TextBox { Left = x, Top = y, Width = w, BorderStyle = BorderStyle.FixedSingle }; }
+        private static Label Lbl(string t, int x, int y) { return new Label { Text = t, Left = x, Top = y, Width = 510, Height = 16, ForeColor = System.Drawing.Color.FromArgb(80, 80, 80) }; }
+        private static Label Cap(string t, int x, int y) { return new Label { Text = t, Left = x, Top = y, Width = 300, Height = 16, ForeColor = System.Drawing.Color.FromArgb(120, 120, 120), Font = new System.Drawing.Font("Segoe UI", 8F, System.Drawing.FontStyle.Bold) }; }
+        private Button BrowseBtn(TextBox target, int x, int y)
+        {
+            var b = new Button { Text = "Browse…", Left = x, Top = y - 1, Width = 84, Height = 24, FlatStyle = FlatStyle.System };
+            b.Click += (o, e) => { using (var fb = new FolderBrowserDialog()) { if (fb.ShowDialog() == DialogResult.OK) target.Text = fb.SelectedPath; } };
+            return b;
+        }
+
+        private void LoadAll()
+        {
+            try
+            {
+                string p = Path.Combine(Dir(), "archive.json");
+                if (File.Exists(p))
+                {
+                    var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                    var d = js.DeserializeObject(File.ReadAllText(p)) as System.Collections.Generic.Dictionary<string, object>;
+                    if (d != null)
+                    {
+                        // Archive folders: new "bases" list of {name, path}; fall back to old client/supplier.
+                        var sbB = new System.Text.StringBuilder();
+                        var basesArr = d.ContainsKey("bases") ? d["bases"] as object[] : null;
+                        if (basesArr != null)
+                            foreach (var o in basesArr)
+                            {
+                                var bd = o as System.Collections.Generic.Dictionary<string, object>;
+                                if (bd == null) continue;
+                                string nm = Get(bd, "name"), pth = Get(bd, "path");
+                                if (nm.Length > 0) sbB.AppendLine(nm + " = " + pth);
+                            }
+                        else
+                        {
+                            string cb = Get(d, "client_base"), sb2 = Get(d, "supplier_base");
+                            if (cb.Length > 0) sbB.AppendLine("Clients = " + cb);
+                            if (sb2.Length > 0) sbB.AppendLine("Suppliers = " + sb2);
+                        }
+                        _bases.Text = sbB.ToString().TrimEnd();
+                        _sub.Text = Get(d, "default_subfolder");
+                        string mode = Get(d, "save_mode").ToLowerInvariant();
+                        _mode.SelectedIndex = mode == "email" ? 1 : (mode == "attachments" ? 2 : 0);
+                        var cc = d.ContainsKey("country_codes") ? d["country_codes"] as System.Collections.Generic.Dictionary<string, object> : null;
+                        if (cc != null) { var sb = new System.Text.StringBuilder(); foreach (var kv in cc) sb.AppendLine(kv.Key + "=" + (kv.Value ?? "")); _codes.Text = sb.ToString().TrimEnd(); }
+                    }
+                }
+            }
+            catch { }
+            if (_mode.SelectedIndex < 0) _mode.SelectedIndex = 0;
+            try { string t = Path.Combine(Dir(), "tone.txt"); if (File.Exists(t)) _tone.Text = File.ReadAllText(t).Trim(); } catch { }
+        }
+
+        private void SaveAll()
+        {
+            try
+            {
+                Directory.CreateDirectory(Dir());
+                var codes = new System.Collections.Generic.Dictionary<string, object>();
+                foreach (var line in (_codes.Text ?? "").Replace("\r", "").Split('\n'))
+                {
+                    int i = line.IndexOf('=');
+                    if (i > 0) { string k = line.Substring(0, i).Trim(); string v = line.Substring(i + 1).Trim(); if (k.Length > 0 && v.Length > 0) codes[k] = v; }
+                }
+                var bases = new System.Collections.Generic.List<object>();
+                foreach (var line in (_bases.Text ?? "").Replace("\r", "").Split('\n'))
+                {
+                    int i = line.IndexOf('=');
+                    if (i > 0)
+                    {
+                        string nm = line.Substring(0, i).Trim(), pth = line.Substring(i + 1).Trim();
+                        if (nm.Length > 0 && pth.Length > 0)
+                            bases.Add(new System.Collections.Generic.Dictionary<string, object> { { "name", nm }, { "path", pth } });
+                    }
+                }
+                var d = new System.Collections.Generic.Dictionary<string, object> {
+                    { "bases", bases },
+                    { "country_codes", codes },
+                    { "save_mode", new[] { "both", "email", "attachments" }[_mode.SelectedIndex < 0 ? 0 : _mode.SelectedIndex] },
+                    { "default_subfolder", (_sub.Text ?? "").Trim() },
+                };
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                File.WriteAllText(Path.Combine(Dir(), "archive.json"), js.Serialize(d));
+                File.WriteAllText(Path.Combine(Dir(), "tone.txt"), (_tone.Text ?? "").Trim());
+            }
+            catch (Exception ex) { Ui.Notify("Couldn't save settings: " + ex.Message, "Axon intelligence"); }
+        }
+
+        private void LearnTone()
+        {
+            _learn.Enabled = false; _learn.Text = "Reading your Sent mail…";
+            var t = new System.Threading.Thread(() =>
+            {
+                string tone = "";
+                try { tone = _owner.LearnToneFromSent(); } catch { }
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (!string.IsNullOrEmpty(tone)) _tone.Text = tone;
+                        else Ui.Notify("Couldn't read your Sent items (is Outlook set up?).", "Axon intelligence");
+                        _learn.Enabled = true; _learn.Text = "Learn from my Sent emails";
+                    }));
+                }
+                catch { }
+            });
+            t.IsBackground = true; t.Start();
+        }
+    }
+
     // Resizable summary dialog: pick the language (re-summarizes on change), and a Reply button to
     // jump straight into composing a reply to the same email.
     internal class SummaryDialog : Form
     {
-        private readonly TextBox _box;
+        private readonly RichTextBox _box;
         private readonly ComboBox _lang;
         private readonly Func<string, string> _summarize;   // language -> summary text
         public bool WantsReply { get; private set; }
@@ -1547,9 +2135,9 @@ namespace Axon.OutlookAddin
             _lang.Items.AddRange(new object[] { "Auto (match the email)", "English", "Nederlands (Dutch)", "Français (French)" });
             _lang.SelectedIndex = 0;
             _lang.SelectedIndexChanged += (o, e) => Regenerate();
-            _box = new TextBox { Left = 16, Top = 48, Width = ClientSize.Width - 32, Height = ClientSize.Height - 100,
+            _box = new RichTextBox { Left = 16, Top = 48, Width = ClientSize.Width - 32, Height = ClientSize.Height - 100,
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.FixedSingle,
+                ReadOnly = true, ScrollBars = RichTextBoxScrollBars.Vertical, BorderStyle = BorderStyle.FixedSingle,
                 Text = "Summarizing…", Font = new System.Drawing.Font("Segoe UI", 9.75f), BackColor = System.Drawing.Color.White };
             var reply = new Button { Text = "Reply", Width = 90, Height = 28,
                 Left = ClientSize.Width - 200, Top = ClientSize.Height - 40, Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
@@ -1586,9 +2174,20 @@ namespace Axon.OutlookAddin
         {
             if (IsDisposed) return;
             if (InvokeRequired) { try { BeginInvoke(new Action(() => SetText(s))); } catch { } return; }
-            // Strip any stray markdown bold, and use CRLF so the TextBox shows line breaks.
-            _box.Text = (s ?? "").Replace("**", "").Replace("\r\n", "\n").Replace("\n", "\r\n");
+            string text = (s ?? "").Replace("**", "").Replace("\r\n", "\n").Replace("\n", "\r\n");
+            _box.Text = text;
+            BoldSummaryHeading("Gist:");
+            BoldSummaryHeading("Key points:");
+            BoldSummaryHeading("Action:");
             _box.Select(0, 0);
+        }
+
+        private void BoldSummaryHeading(string heading)
+        {
+            int start = _box.Text.IndexOf(heading, StringComparison.OrdinalIgnoreCase);
+            if (start < 0) return;
+            _box.Select(start, heading.Length);
+            _box.SelectionFont = new System.Drawing.Font(_box.Font, System.Drawing.FontStyle.Bold);
         }
     }
 

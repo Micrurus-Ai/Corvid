@@ -56,22 +56,37 @@ if (-not (Test-Path "$ocuSrc\open-computer-use.cmd")) {
 Copy-Item $ocuSrc (Join-Path $dist "ocu") -Recurse -Force
 Write-Host "   open-computer-use staged." -ForegroundColor Green
 
-# --- 4. Compile the installer ------------------------------------------------
-Step "4/4  Compiling the installer (Axon-Setup.exe)"
+# --- 4. Compile the two installers -------------------------------------------
+Step "4/4  Compiling the installers (dot + Outlook add-in)"
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
           "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
           "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { throw "Inno Setup not found. Install it: winget install JRSoftware.InnoSetup" }
-# Pass the Mistral key (from assistant\.env) so the installer sets the add-in's config.json to Mistral.
-$mistral = ""
-$envFile = Join-Path $asst ".env"
-if (Test-Path $envFile) {
-    $ml = Select-String -Path $envFile -Pattern '^\s*MISTRAL_API_KEY\s*=\s*(.+)$' | Select-Object -First 1
-    if ($ml) { $mistral = $ml.Matches[0].Groups[1].Value.Trim() }
-}
-& $iscc "/DMistralKey=$mistral" (Join-Path $root "installer\Axon.iss") | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "Installer compile failed." }
 
-$setup = Join-Path $root "installer\Output\Axon-Setup.exe"
-$mb = "{0:N0} MB" -f ((Get-Item $setup).Length / 1MB)
-Write-Host "`nDONE -> $setup  ($mb)" -ForegroundColor Green
+# Read the keys (from assistant\.env) — the standalone Outlook add-in bakes both into its config.json.
+function Read-EnvKey($name) {
+    $envFile = Join-Path $asst ".env"
+    if (Test-Path $envFile) {
+        $m = Select-String -Path $envFile -Pattern ("^\s*" + $name + "\s*=\s*(.+)$") | Select-Object -First 1
+        if ($m) { return $m.Matches[0].Groups[1].Value.Trim() }
+    }
+    return ""
+}
+$mistral = Read-EnvKey "MISTRAL_API_KEY"
+$openai  = Read-EnvKey "OPENAI_API_KEY"
+
+# 4a. The dot (floating dot only) -> Axon-Dot-Setup.exe
+& $iscc (Join-Path $root "installer\Axon.iss") | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Dot installer compile failed." }
+
+# 4b. The Outlook add-in (standalone) -> Axon-Outlook-Setup.exe (both keys baked into config.json)
+& $iscc "/DMistralKey=$mistral" "/DOpenAIKey=$openai" (Join-Path $root "installer\AxonOutlook.iss") | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Outlook add-in installer compile failed." }
+
+$dot = Join-Path $root "installer\Output\Axon-Dot-Setup.exe"
+$olk = Join-Path $root "installer\Output\Axon-Outlook-Setup.exe"
+$dotMb = "{0:N0} MB" -f ((Get-Item $dot).Length / 1MB)
+$olkMb = "{0:N1} MB" -f ((Get-Item $olk).Length / 1MB)
+Write-Host "`nDONE:" -ForegroundColor Green
+Write-Host "  Dot     -> $dot  ($dotMb)" -ForegroundColor Green
+Write-Host "  Outlook -> $olk  ($olkMb)" -ForegroundColor Green
