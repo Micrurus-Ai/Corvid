@@ -20,7 +20,7 @@
   <Product Id="*"
            Name="Axon Outlook add-in"
            Language="1033"
-           Version="1.0.1.0"
+           Version="1.0.0.0"
            Manufacturer="Axon Group"
            UpgradeCode="E7A3C1B9-2F64-4D18-9A5C-1B7E3D9F62A4">
 
@@ -98,9 +98,11 @@
       </Component>
     </DirectoryRef>
 
-    <!-- 4. config.json with both keys baked. NeverOverwrite => won't clobber an existing config. -->
+    <!-- 4. config.json with both keys baked. The standalone add-in reads its ONLY keys from here, and
+         nothing at runtime writes this file (Settings/tone/archive use separate files), so we always
+         install it. That also dodges the NeverOverwrite+MajorUpgrade quirk that can drop the file. -->
     <DirectoryRef Id="CONFIGFOLDER">
-      <Component Id="ConfigFile" Guid="4F71B2A5-6E18-4C49-A05B-9D4E6F801123" NeverOverwrite="yes">
+      <Component Id="ConfigFile" Guid="4F71B2A5-6E18-4C49-A05B-9D4E6F801123">
         <File Id="ConfigJson" Name="config.json" Source="$(var.StagedConfig)" KeyPath="yes" />
       </Component>
     </DirectoryRef>
