@@ -83,15 +83,15 @@ namespace Axon.OutlookAddin
         {
             return "<contextMenu idMso='" + idMso + "'>" +
                    "<menuSeparator id='axonSep_" + idMso + "'/>" +
-                   "<button id='axonSummarize_" + idMso + "' label='Summarize with Axon' getImage='GetSummarizeImage' onAction='OnSummarize'/>" +
-                   "<button id='axonReply_" + idMso + "' label='Reply with Axon' getImage='GetReplyImage' onAction='OnReply'/>" +
-                   "<button id='axonSchedule_" + idMso + "' label='Schedule with Axon' getImage='GetScheduleImage' onAction='OnSchedule'/>" +
-                   "<button id='axonFollowUp_" + idMso + "' label='Follow up with Axon' getImage='GetFollowUpImage' onAction='OnFollowUp'/>" +
+                   "<button id='axonSummarize_" + idMso + "' label='Summarize with Disassist' getImage='GetSummarizeImage' onAction='OnSummarize'/>" +
+                   "<button id='axonReply_" + idMso + "' label='Reply with Disassist' getImage='GetReplyImage' onAction='OnReply'/>" +
+                   "<button id='axonSchedule_" + idMso + "' label='Schedule with Disassist' getImage='GetScheduleImage' onAction='OnSchedule'/>" +
+                   "<button id='axonFollowUp_" + idMso + "' label='Follow up with Disassist' getImage='GetFollowUpImage' onAction='OnFollowUp'/>" +
                    "<button id='axonAttach_" + idMso + "' label='Forward as attachment' getImage='GetAttachImage' onAction='OnAttachEmail'/>" +
-                   "<button id='axonMove_" + idMso + "' label='Move with Axon' getImage='GetMoveImage' onAction='OnFile'/>" +
-                   "<button id='axonDownload_" + idMso + "' label='Download with Axon' getImage='GetDownloadImage' onAction='OnDownload'/>" +
+                   "<button id='axonMove_" + idMso + "' label='Move with Disassist' getImage='GetMoveImage' onAction='OnFile'/>" +
+                   "<button id='axonDownload_" + idMso + "' label='Download with Disassist' getImage='GetDownloadImage' onAction='OnDownload'/>" +
                    "<menuSeparator id='axonSep2_" + idMso + "'/>" +
-                   "<button id='axonSettings_" + idMso + "' label='Axon Settings' getImage='GetSettingsImage' onAction='OnSettings'/>" +
+                   "<button id='axonSettings_" + idMso + "' label='Disassist Settings' getImage='GetSettingsImage' onAction='OnSettings'/>" +
                    "</contextMenu>";
         }
 
