@@ -21,9 +21,7 @@ namespace Axon.OutlookAddin
                 dynamic mail = m;
                 string subj = ""; try { subj = (string)mail.Subject; } catch { }
                 string body = ""; try { body = (string)mail.Body; } catch { }
-                // Threads keep the OLDEST replies at the bottom, so a tight cap would truncate exactly the
-                // messages the Conversation timeline needs. Leave plenty of room.
-                if (body.Length > 14000) body = body.Substring(0, 14000);
+                body = TrimForSummary(body);
                 string bodyCopy = body;
                 bool wantsReply;
                 using (var dlg = new SummaryDialog(subj,
@@ -35,6 +33,24 @@ namespace Axon.OutlookAddin
                 if (wantsReply) OnReply(control);   // jump straight into the reply flow on the same email
             }
             catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
+        }
+
+        // No practical limit: 150k characters is roughly 39k tokens, and the longest thread anyone
+        // actually sends is a small fraction of that. A hard ceiling still has to exist, because past it
+        // the model call fails outright (context window / rate limit) and the user gets NO summary at all
+        // — worse than trimming. Measured against both providers: 150k is comfortable on each; 400k
+        // rate-limits the primary.
+        private const int SummaryBodyMax = 150000;
+
+        // If a thread somehow exceeds the ceiling, keep the NEWEST messages (top of the body) and the
+        // OLDEST (bottom) and drop only the middle, so the Conversation timeline still sees both ends.
+        private static string TrimForSummary(string body)
+        {
+            if (string.IsNullOrEmpty(body) || body.Length <= SummaryBodyMax) return body;
+            int half = SummaryBodyMax / 2;
+            return body.Substring(0, half)
+                 + "\n\n[... middle of this very long thread omitted ...]\n\n"
+                 + body.Substring(body.Length - half);
         }
 
         private string BuildSummaryPrompt(string subject, string body, string lang)
