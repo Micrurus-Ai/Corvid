@@ -6,6 +6,12 @@
 # Output: installer\Output\Axon-Outlook.msi
 
 $ErrorActionPreference = "Stop"
+
+# ---- Bump the add-in version HERE. It drives both the .msi filename and the version IT sees in
+# ---- Add/Remove Programs. Windows Installer compares the first three parts, so bump one of those
+# ---- (e.g. 1.0.1) for an upgrade to replace an older install.
+$Version = "1.0.0"
+
 $root  = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $inst  = Join-Path $root "installer"
 $asst  = Join-Path $root "assistant"
@@ -39,9 +45,13 @@ $staged = Join-Path $env:TEMP "axon-config.json"
 $candle = Join-Path $wix "candle.exe"
 $light  = Join-Path $wix "light.exe"
 $wixobj = Join-Path $env:TEMP "AxonOutlook.wixobj"
-$msi    = Join-Path $out "Axon-Outlook.msi"
+# The version is in the filename so IT can see at a glance which build is deployed.
+$msi    = Join-Path $out "Axon-Outlook-$Version.msi"
 
-& $candle -nologo -arch x64 "-dStagedConfig=$staged" -out $wixobj (Join-Path $inst "AxonOutlook.wxs")
+# Drop stale versioned MSIs so Output only ever holds the current build.
+Get-ChildItem (Join-Path $out "Axon-Outlook*.msi") -EA SilentlyContinue | Remove-Item -Force -EA SilentlyContinue
+
+& $candle -nologo -arch x64 "-dStagedConfig=$staged" "-dVersion=$Version.0" -out $wixobj (Join-Path $inst "AxonOutlook.wxs")
 if ($LASTEXITCODE -ne 0) { throw "candle failed." }
 # -sval: skip ICE validation (per-user profile-dir keypaths trip harmless ICE warnings).
 & $light -nologo -sval -b $inst -out $msi $wixobj
@@ -49,4 +59,4 @@ if ($LASTEXITCODE -ne 0) { throw "light failed." }
 
 Remove-Item $staged -Force -EA SilentlyContinue
 $mb = "{0:N2} MB" -f ((Get-Item $msi).Length / 1MB)
-Write-Host "DONE:  $msi  ($mb)" -ForegroundColor Green
+Write-Host "DONE:  $msi  (v$Version, $mb)" -ForegroundColor Green

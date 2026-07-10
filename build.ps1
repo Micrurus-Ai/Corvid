@@ -89,7 +89,8 @@ if ($LASTEXITCODE -ne 0) { throw "Outlook add-in MSI build failed." }
 
 $dot = Join-Path $root "installer\Output\Axon-Dot-Setup.exe"
 $olk = Join-Path $root "installer\Output\Axon-Outlook-Setup.exe"
-$msi = Join-Path $root "installer\Output\Axon-Outlook.msi"
+# The MSI carries its version in the filename (Axon-Outlook-1.0.0.msi).
+$msi = (Get-ChildItem (Join-Path $root "installer\Output\Axon-Outlook-*.msi") | Select-Object -First 1).FullName
 $dotMb = "{0:N0} MB" -f ((Get-Item $dot).Length / 1MB)
 $olkMb = "{0:N1} MB" -f ((Get-Item $olk).Length / 1MB)
 $msiMb = "{0:N1} MB" -f ((Get-Item $msi).Length / 1MB)

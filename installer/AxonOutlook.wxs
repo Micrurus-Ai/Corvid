@@ -20,7 +20,7 @@
   <Product Id="*"
            Name="Axon Outlook add-in"
            Language="1033"
-           Version="1.0.0.0"
+           Version="$(var.Version)"
            Manufacturer="Axon Group"
            UpgradeCode="E7A3C1B9-2F64-4D18-9A5C-1B7E3D9F62A4">
 
@@ -32,7 +32,11 @@
              Description="Axon intelligence for Outlook"
              Manufacturer="Axon Group" />
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of the Axon Outlook add-in is already installed." />
+    <!-- AllowSameVersionUpgrades: each build mints a new ProductCode (Id="*"), so without this a
+         re-push of the SAME version installs a second copy alongside the first instead of replacing
+         it. With it, any install (same or higher version) cleanly replaces what's there. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of the Axon Outlook add-in is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Property Id="ARPNOMODIFY" Value="1" />
