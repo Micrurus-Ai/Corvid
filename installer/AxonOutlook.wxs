@@ -105,6 +105,28 @@
       <Component Id="ConfigFile" Win64="yes" Guid="4F71B2A5-6E18-4C49-A05B-9D4E6F801123">
         <File Id="ConfigJson" Name="config.json" Source="$(var.StagedConfig)" KeyPath="yes" />
       </Component>
+
+      <!-- 5. Scrub an older PER-USER install. HKCU COM registration takes precedence over HKLM, so a
+           leftover per-user copy would shadow this machine-wide one and that user would keep running
+           the old add-in. This reaches only the hive of whoever runs the MSI. -->
+      <Component Id="CleanupPerUser" Win64="yes" Guid="5A82C3B6-7F29-4D5A-B16C-0E5F7A912234">
+        <RegistryValue Root="HKLM" Key="Software\Axon\Disassist" Name="MachineWide" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveRegistryKey Root="HKCU" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}" Action="removeOnInstall" />
+        <RemoveRegistryKey Root="HKCU" Key="Software\Classes\Axon.OutlookAddin" Action="removeOnInstall" />
+        <RemoveRegistryKey Root="HKCU" Key="Software\Microsoft\Office\Outlook\AddIns\Axon.OutlookAddin" Action="removeOnInstall" />
+      </Component>
+
+      <!-- 6. When IT pushes this as SYSTEM, the HKCU above is SYSTEM's hive, not the users'. Active Setup
+           runs its StubPath ONCE for each user at their next sign-in — the supported way to reach every
+           profile — so their stale per-user registration gets removed too. -->
+      <Component Id="ActiveSetupCleanup" Win64="yes" Guid="6B93D4C7-8036-4E6B-A27D-1F608B023345">
+        <RegistryKey Root="HKLM" Key="Software\Microsoft\Active Setup\Installed Components\{9F2E7A41-5C63-4B08-A7D9-3E1F6B84C205}">
+          <RegistryValue Type="string" Value="Axon Disassist - remove old per-user add-in registration" KeyPath="yes" />
+          <RegistryValue Type="string" Name="Version" Value="1,0,0,0" />
+          <RegistryValue Type="string" Name="StubPath"
+                         Value="cmd.exe /c reg delete &quot;HKCU\Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}&quot; /f &amp; reg delete &quot;HKCU\Software\Classes\Axon.OutlookAddin&quot; /f &amp; reg delete &quot;HKCU\Software\Microsoft\Office\Outlook\AddIns\Axon.OutlookAddin&quot; /f" />
+        </RegistryKey>
+      </Component>
     </DirectoryRef>
 
     <Feature Id="MainFeature" Title="Axon Outlook add-in" Level="1">
@@ -112,6 +134,8 @@
       <ComponentRef Id="ComRegistration" />
       <ComponentRef Id="OutlookAddinReg" />
       <ComponentRef Id="ConfigFile" />
+      <ComponentRef Id="CleanupPerUser" />
+      <ComponentRef Id="ActiveSetupCleanup" />
     </Feature>
   </Product>
 </Wix>

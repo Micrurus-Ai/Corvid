@@ -53,6 +53,13 @@ Source: "{#AddinDir}\axon-write.png";     DestDir: "{app}"; Flags: ignoreversion
 Source: "{#AddinDir}\axon-attach.png";    DestDir: "{app}"; Flags: ignoreversion
 Source: "{#AddinDir}\axon-settings.png";  DestDir: "{app}"; Flags: ignoreversion
 
+[UninstallDelete]
+; WriteAddinConfig creates config.json at run time, so Setup doesn't track it and uninstall would
+; otherwise leave the API keys sitting in Program Files. Remove it, then the now-empty folders.
+Type: files;     Name: "{app}\config.json"
+Type: dirifempty; Name: "{app}"
+Type: dirifempty; Name: "{commonpf}\Axon"
+
 [Code]
 const
   CLSID  = '{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}';
@@ -111,10 +118,25 @@ begin
   SaveStringToFile(path, json, False);
 end;
 
+{ Earlier builds installed PER-USER (HKCU + %LOCALAPPDATA%\AxonOutlook). HKCU COM registration takes
+  precedence over HKLM, so a leftover per-user copy would shadow this machine-wide one and the user
+  would keep running the old add-in. Scrub it. }
+procedure RemoveOldPerUserInstall;
+var
+  old: String;
+begin
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\CLSID\' + CLSID);
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\' + PROGID);
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Office\Outlook\AddIns\' + PROGID);
+  old := ExpandConstant('{localappdata}\AxonOutlook');
+  if DirExists(old) then DelTree(old, True, True, True);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    RemoveOldPerUserInstall;
     RegisterAddin;
     WriteAddinConfig;
   end;
