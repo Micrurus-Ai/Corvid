@@ -21,7 +21,7 @@ namespace Axon.OutlookAddin
                 dynamic mail = m;
                 string subj = ""; try { subj = (string)mail.Subject; } catch { }
                 string body = ""; try { body = (string)mail.Body; } catch { }
-                body = TrimForSummary(body);
+                body = TrimBody(body, SummaryBodyMax);
                 string bodyCopy = body;
                 // A reply thread is a big body that also needs long-context reasoning to build the
                 // timeline. The backup provider handles those markedly faster, so send threads there.
@@ -57,17 +57,20 @@ namespace Axon.OutlookAddin
 
         // No practical limit: 150k characters is roughly 39k tokens, and the longest thread anyone
         // actually sends is a small fraction of that. A hard ceiling still has to exist, because past it
-        // the model call fails outright (context window / rate limit) and the user gets NO summary at all
+        // the model call fails outright (context window / rate limit) and the user gets NO answer at all
         // — worse than trimming. Measured against both providers: 150k is comfortable on each; 400k
         // rate-limits the primary.
         private const int SummaryBodyMax = 150000;
+        // A reply needs the thread's history, but not at summary depth — 50k chars (~13k tokens) covers
+        // any real back-and-forth and keeps drafting snappy.
+        private const int ReplyBodyMax = 50000;
 
-        // If a thread somehow exceeds the ceiling, keep the NEWEST messages (top of the body) and the
-        // OLDEST (bottom) and drop only the middle, so the Conversation timeline still sees both ends.
-        private static string TrimForSummary(string body)
+        // If a thread exceeds the ceiling, keep the NEWEST messages (top of the body) and the OLDEST
+        // (bottom) and drop only the middle, so both ends of the conversation survive.
+        private static string TrimBody(string body, int max)
         {
-            if (string.IsNullOrEmpty(body) || body.Length <= SummaryBodyMax) return body;
-            int half = SummaryBodyMax / 2;
+            if (string.IsNullOrEmpty(body) || body.Length <= max) return body;
+            int half = max / 2;
             return body.Substring(0, half)
                  + "\n\n[... middle of this very long thread omitted ...]\n\n"
                  + body.Substring(body.Length - half);
@@ -110,13 +113,16 @@ namespace Axon.OutlookAddin
                 string subj = ""; try { subj = (string)mail.Subject; } catch { }
                 string sender = ""; try { sender = (string)mail.SenderName; } catch { }
                 string body = ""; try { body = (string)mail.Body; } catch { }
-                if (body.Length > 6000) body = body.Substring(0, 6000);
+                // Read the whole back-and-forth, not just the newest message, so the draft knows what was
+                // already said. Threads go to the backup provider first — it is much faster on big bodies.
+                body = TrimBody(body, ReplyBodyMax);
                 string me = ""; try { me = (string)((dynamic)_app).Session.CurrentUser.Name; } catch { }
                 string bodyCopy = body;
+                bool thread = IsThread(subj, bodyCopy);
                 // Ask the user HOW they want to reply, then Axon drafts to that instruction.
                 string draft;
                 using (var prompt = new ReplyPrompt(subj,
-                    (instr, lang) => ModelComplete(BuildReplyPrompt(subj, sender, bodyCopy, instr, me, lang), 0.4)))
+                    (instr, lang) => ModelComplete(BuildReplyPrompt(subj, sender, bodyCopy, instr, me, lang, thread), 0.4, thread)))
                 {
                     if (prompt.ShowDialog() != DialogResult.OK) return;
                     draft = prompt.Draft;
@@ -148,18 +154,35 @@ namespace Axon.OutlookAddin
             return e.Replace("\r\n", "\n").Replace("\n", "<br>");
         }
 
-        private string BuildReplyPrompt(string subject, string sender, string body, string instruction, string me, string lang)
+        private string BuildReplyPrompt(string subject, string sender, string body, string instruction, string me, string lang, bool thread)
         {
+            // The user is in charge. When they say what to reply, that instruction decides the content and
+            // the email is only background — the draft must not wander off answering points they never
+            // raised. This matters most on a thread, where there is a lot of old material to be tempted by.
             string how = string.IsNullOrWhiteSpace(instruction)
                 ? "Write a concise, professional, courteous reply that addresses the points raised."
-                : "Write the reply following these instructions from the user: " + instruction;
+                : "The USER'S INSTRUCTION below decides what this reply says. Follow it exactly and cover " +
+                  "everything it asks for, and nothing it does not. Treat the email itself as background " +
+                  "context only: do NOT answer other questions from it, and do NOT raise points the user " +
+                  "did not ask you to raise.\nUSER'S INSTRUCTION: " + instruction;
+            // On a thread, reply to the LATEST message; earlier ones are history, not open questions.
+            string threadLine = thread
+                ? " This email is a thread: the NEWEST message is at the top and older replies follow below. " +
+                  "Reply to the newest message. Use the earlier messages only as background — do not re-answer " +
+                  "points that were already settled earlier in the thread. Never quote the thread back."
+                : "";
+            // Detect the language from the TEXT, never from a name: 'Hélène' or 'Jan' is not evidence that
+            // an English email is French or Dutch, and getting this wrong sends a reply in the wrong language.
             string langLine = string.IsNullOrEmpty(lang)
-                ? "Write the reply in the SAME language as the email."
+                ? "Write the reply in the SAME language as the email body. Determine that language from the " +
+                  "WORDS of the most recent message only. Ignore the language of people's names, signatures, " +
+                  "companies and addresses — a French- or Dutch-looking name does NOT mean the email is in " +
+                  "French or Dutch. If the message is written in English, reply in English."
                 : "Write the ENTIRE reply (greeting, message, and sign-off) in " + lang + ", regardless of the email's language.";
             string tone = MyToneGuide();
             string toneLine = string.IsNullOrEmpty(tone) ? "" : " IMPORTANT: write in the USER'S OWN VOICE, following this style profile exactly — same greeting, sign-off, vocabulary, recurring phrases, punctuation and level of formality, so it reads as if the user wrote it themselves:\n" + tone + "\n";
-            return how + " Begin with an appropriate greeting addressed to the sender by first name, and end " +
-                   "with a courteous sign-off" + (string.IsNullOrWhiteSpace(me) ? "" : " from " + me) + ". " +
+            return how + threadLine + " Begin with an appropriate greeting addressed to the sender by first " +
+                   "name, and end with a courteous sign-off" + (string.IsNullOrWhiteSpace(me) ? "" : " from " + me) + ". " +
                    langLine + toneLine + " Use a natural tone. Output ONLY the reply text itself (greeting, " +
                    "message, sign-off) — no subject line and no quoted original.\n\n" +
                    "Sender: " + sender + "\nSubject: " + subject + "\n\n" + body;
