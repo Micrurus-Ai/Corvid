@@ -21,7 +21,9 @@ namespace Axon.OutlookAddin
                 dynamic mail = m;
                 string subj = ""; try { subj = (string)mail.Subject; } catch { }
                 string body = ""; try { body = (string)mail.Body; } catch { }
-                if (body.Length > 6000) body = body.Substring(0, 6000);
+                // Threads keep the OLDEST replies at the bottom, so a tight cap would truncate exactly the
+                // messages the Conversation timeline needs. Leave plenty of room.
+                if (body.Length > 14000) body = body.Substring(0, 14000);
                 string bodyCopy = body;
                 bool wantsReply;
                 using (var dlg = new SummaryDialog(subj,
@@ -46,7 +48,18 @@ namespace Axon.OutlookAddin
                 "links, attachments, and any questions raised). Do NOT over-compress — it is better to keep a detail " +
                 "than to drop it. Use this layout, with a blank line between sections:\n\n" +
                 "Gist: <2-3 sentences giving the full picture>\n\n" +
-                "Key points:\n- <point>\n- <point>\n- <point>\n(list every meaningful point, one per line — include the specifics)\n\n" +
+                "Conversation:\n" +
+                "- On 25 June, Jan replied: <what he said>\n" +
+                "- On 26 June, Disan sent: <what she said>\n" +
+                "(ONLY include this section when the email is a thread with MORE THAN ONE message. Walk the " +
+                "replies in time order, OLDEST FIRST. One line per message: start with 'On <day> <month>' " +
+                "(add the time only if two messages share a day), then WHO it was and whether they sent, replied " +
+                "or forwarded, then what they actually said. Never merge two messages into one line, and never " +
+                "invent a date — use only the dates in the email. If it is a single message with no replies, " +
+                "OMIT this whole section, heading included.)\n\n" +
+                "Key points:\n- <point>\n- <point>\n- <point>\n(the substance that is not already obvious from the " +
+                "conversation above — decisions, numbers, names, links, attachments, open questions. Do not repeat " +
+                "the thread line by line.)\n\n" +
                 "Action: <what the reader should do, including any deadline or detail, or 'None'>\n\n" +
                 langLine + "\n\nSubject: " + subject + "\n\n" + body;
         }

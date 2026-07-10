@@ -323,6 +323,7 @@ namespace Axon.OutlookAddin
             string text = (s ?? "").Replace("**", "").Replace("\r\n", "\n").Replace("\n", "\r\n");
             _box.Text = text;
             BoldSummaryHeading("Gist:");
+            BoldSummaryHeading("Conversation:");   // only present when the email is a thread
             BoldSummaryHeading("Key points:");
             BoldSummaryHeading("Action:");
             _box.Select(0, 0);
