@@ -320,13 +320,29 @@ namespace Axon.OutlookAddin
         {
             if (IsDisposed) return;
             if (InvokeRequired) { try { BeginInvoke(new Action(() => SetText(s))); } catch { } return; }
-            string text = (s ?? "").Replace("**", "").Replace("\r\n", "\n").Replace("\n", "\r\n");
+            string text = SpaceBullets((s ?? "").Replace("**", "").Replace("\r\n", "\n")).Replace("\n", "\r\n");
             _box.Text = text;
             BoldSummaryHeading("Gist:");
             BoldSummaryHeading("Conversation:");   // only present when the email is a thread
             BoldSummaryHeading("Key points:");
             BoldSummaryHeading("Action:");
             _box.Select(0, 0);
+        }
+
+        // Give the points room to breathe: a blank line BETWEEN consecutive '- ' bullets only, so the
+        // gaps that already precede a section heading don't get doubled.
+        private static string SpaceBullets(string s)
+        {
+            var lines = (s ?? "").Split('\n');
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                sb.Append(lines[i]).Append('\n');
+                bool bullet = lines[i].TrimStart().StartsWith("- ");
+                bool nextBullet = i + 1 < lines.Length && lines[i + 1].TrimStart().StartsWith("- ");
+                if (bullet && nextBullet) sb.Append('\n');
+            }
+            return sb.ToString().TrimEnd('\n');
         }
 
         private void BoldSummaryHeading(string heading)

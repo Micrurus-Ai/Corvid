@@ -89,16 +89,31 @@ namespace Axon.OutlookAddin
         // backup provider (OpenAI) so the feature keeps working. Shared by suggest, summarize, and reply.
         private string ModelComplete(string prompt, double temperature)
         {
+            return ModelComplete(prompt, temperature, false);
+        }
+
+        // preferBackup: send to the BACKUP provider first. Long reply threads are much faster there
+        // (measured: ~3x on a large body), so Summarize routes threads to it. Either way the OTHER
+        // provider is still tried if the first one errors, so the feature never dies.
+        private string ModelComplete(string prompt, double temperature, bool preferBackup)
+        {
             LoadConfig();
-            string text = CallChat(_apiBase, _apiKey, _model, prompt, temperature);
+            bool backupUsable = !string.IsNullOrEmpty(_backupKey);
+            bool backupDifferent = !(string.Equals(_backupBase, _apiBase, StringComparison.OrdinalIgnoreCase)
+                                     && string.Equals(_backupModel, _model, StringComparison.OrdinalIgnoreCase));
+            bool backupFirst = preferBackup && backupUsable && backupDifferent;
+
+            string text = backupFirst
+                ? CallChat(_backupBase, _backupKey, _backupModel, prompt, temperature)
+                : CallChat(_apiBase, _apiKey, _model, prompt, temperature);
+
             if (string.IsNullOrEmpty(text))
             {
-                // Primary failed / unreachable / empty -> fall over to the backup provider, but only if
-                // it is usable and actually a different endpoint (no point re-calling the same one).
-                bool backupUsable = !string.IsNullOrEmpty(_backupKey);
-                bool backupDifferent = !(string.Equals(_backupBase, _apiBase, StringComparison.OrdinalIgnoreCase)
-                                         && string.Equals(_backupModel, _model, StringComparison.OrdinalIgnoreCase));
-                if (backupUsable && backupDifferent)
+                // First choice failed / unreachable / empty -> fall over to the other provider, but only
+                // if it is usable and actually a different endpoint (no point re-calling the same one).
+                if (backupFirst)
+                    text = CallChat(_apiBase, _apiKey, _model, prompt, temperature);
+                else if (backupUsable && backupDifferent)
                     text = CallChat(_backupBase, _backupKey, _backupModel, prompt, temperature);
             }
             return ScrubIdentity(text);

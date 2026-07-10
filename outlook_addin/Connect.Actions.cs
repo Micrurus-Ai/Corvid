@@ -23,9 +23,12 @@ namespace Axon.OutlookAddin
                 string body = ""; try { body = (string)mail.Body; } catch { }
                 body = TrimForSummary(body);
                 string bodyCopy = body;
+                // A reply thread is a big body that also needs long-context reasoning to build the
+                // timeline. The backup provider handles those markedly faster, so send threads there.
+                bool thread = IsThread(subj, bodyCopy);
                 bool wantsReply;
                 using (var dlg = new SummaryDialog(subj,
-                    lang => ModelComplete(BuildSummaryPrompt(subj, bodyCopy, lang), 0.3)))
+                    lang => ModelComplete(BuildSummaryPrompt(subj, bodyCopy, lang), 0.3, thread)))
                 {
                     dlg.ShowDialog();
                     wantsReply = dlg.WantsReply;
@@ -33,6 +36,23 @@ namespace Axon.OutlookAddin
                 if (wantsReply) OnReply(control);   // jump straight into the reply flow on the same email
             }
             catch (Exception ex) { Ui.Notify("Axon error: " + ex.Message, "Axon intelligence"); }
+        }
+
+        // True when the email carries earlier messages: either the subject is a reply/forward, or the
+        // body contains a quoted message header. Multilingual, since the office writes NL / FR / EN.
+        private static bool IsThread(string subject, string body)
+        {
+            string s = (subject ?? "").TrimStart();
+            string[] prefixes = { "RE:", "RE :", "FW:", "FWD:", "TR:", "ANTW:", "AW:", "VS:" };
+            foreach (var p in prefixes)
+                if (s.StartsWith(p, StringComparison.OrdinalIgnoreCase)) return true;
+
+            string b = body ?? "";
+            string[] marks = { "\nFrom:", "\nVan:", "\nDe :", "\nDe:", "\nSent:", "\nVerzonden:", "\nEnvoyé",
+                               "-----Original", "-----Oorspronkelijk", "-----Message d'origine" };
+            foreach (var m in marks)
+                if (b.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return false;
         }
 
         // No practical limit: 150k characters is roughly 39k tokens, and the longest thread anyone
