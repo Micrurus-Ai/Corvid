@@ -33,8 +33,17 @@ namespace Axon.OutlookAddin
             _backupModel = "gpt-4o";
             try
             {
+                // A per-user config wins (lets one user point at their own model server). Otherwise fall
+                // back to the config.json the installer drops NEXT TO THE DLL: a machine-wide install
+                // (C:\Program Files\Axon\Disassist) cannot write into every user's %APPDATA%, so the baked
+                // keys ship beside the assembly and serve every user on the PC.
                 string p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                                         "AxonOutlook", "config.json");
+                if (!File.Exists(p))
+                {
+                    try { p = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "config.json"); }
+                    catch { }
+                }
                 if (File.Exists(p))
                 {
                     var js = new System.Web.Script.Serialization.JavaScriptSerializer();

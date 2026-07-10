@@ -25,10 +25,11 @@ AppId={{B2D8F1A3-4E77-4C9B-A1E6-8D3F2B9C7E52}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-DefaultDirName={localappdata}\AxonOutlook
+; Machine-wide: C:\Program Files\Axon\Disassist, registered under HKLM so it loads for EVERY user.
+DefaultDirName={commonpf}\Axon\Disassist
 DisableProgramGroupPage=yes
 DisableDirPage=yes
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 OutputDir=Output
 OutputBaseFilename=Axon-Outlook-Setup
 Compression=lzma2
@@ -58,8 +59,9 @@ const
   PROGID = 'Axon.OutlookAddin';
   ASM    = 'AxonAddin, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null';
 
-{ Register the managed COM Outlook add-in (per-user). Plain strings avoid the [Registry] GUID-brace
-  parsing problem, and on a 64-bit OS this writes the 64-bit view Outlook reads. }
+{ Register the managed COM Outlook add-in MACHINE-WIDE (HKLM), so it loads for every user on the PC.
+  Plain strings avoid the [Registry] GUID-brace parsing problem, and on a 64-bit OS this writes the
+  64-bit view Outlook reads. }
 procedure RegisterAddin;
 var
   code, clsKey, inproc, addins: String;
@@ -68,40 +70,39 @@ begin
   StringChangeEx(code, '\', '/', True);
   code := 'file:///' + code;
 
-  RegWriteStringValue(HKCU, 'Software\Classes\' + PROGID + '\CLSID', '', CLSID);
+  RegWriteStringValue(HKLM, 'Software\Classes\' + PROGID + '\CLSID', '', CLSID);
 
   clsKey := 'Software\Classes\CLSID\' + CLSID;
   inproc := clsKey + '\InprocServer32';
-  RegWriteStringValue(HKCU, inproc, '', ExpandConstant('{sys}\mscoree.dll'));
-  RegWriteStringValue(HKCU, inproc, 'ThreadingModel', 'Both');
-  RegWriteStringValue(HKCU, inproc, 'Class', 'Axon.OutlookAddin.Connect');
-  RegWriteStringValue(HKCU, inproc, 'Assembly', ASM);
-  RegWriteStringValue(HKCU, inproc, 'RuntimeVersion', 'v4.0.30319');
-  RegWriteStringValue(HKCU, inproc, 'CodeBase', code);
-  RegWriteStringValue(HKCU, inproc + '\0.0.0.0', 'Class', 'Axon.OutlookAddin.Connect');
-  RegWriteStringValue(HKCU, inproc + '\0.0.0.0', 'Assembly', ASM);
-  RegWriteStringValue(HKCU, inproc + '\0.0.0.0', 'RuntimeVersion', 'v4.0.30319');
-  RegWriteStringValue(HKCU, inproc + '\0.0.0.0', 'CodeBase', code);
-  RegWriteStringValue(HKCU, clsKey + '\ProgId', '', PROGID);
+  RegWriteStringValue(HKLM, inproc, '', ExpandConstant('{sys}\mscoree.dll'));
+  RegWriteStringValue(HKLM, inproc, 'ThreadingModel', 'Both');
+  RegWriteStringValue(HKLM, inproc, 'Class', 'Axon.OutlookAddin.Connect');
+  RegWriteStringValue(HKLM, inproc, 'Assembly', ASM);
+  RegWriteStringValue(HKLM, inproc, 'RuntimeVersion', 'v4.0.30319');
+  RegWriteStringValue(HKLM, inproc, 'CodeBase', code);
+  RegWriteStringValue(HKLM, inproc + '\0.0.0.0', 'Class', 'Axon.OutlookAddin.Connect');
+  RegWriteStringValue(HKLM, inproc + '\0.0.0.0', 'Assembly', ASM);
+  RegWriteStringValue(HKLM, inproc + '\0.0.0.0', 'RuntimeVersion', 'v4.0.30319');
+  RegWriteStringValue(HKLM, inproc + '\0.0.0.0', 'CodeBase', code);
+  RegWriteStringValue(HKLM, clsKey + '\ProgId', '', PROGID);
 
   addins := 'Software\Microsoft\Office\Outlook\AddIns\' + PROGID;
-  RegWriteStringValue(HKCU, addins, 'FriendlyName', 'Axon intelligence');
-  RegWriteStringValue(HKCU, addins, 'Description', 'Summarize, reply, schedule, file and download emails with Axon');
-  RegWriteDWordValue(HKCU, addins, 'LoadBehavior', 3);
+  RegWriteStringValue(HKLM, addins, 'FriendlyName', 'Axon intelligence');
+  RegWriteStringValue(HKLM, addins, 'Description', 'Summarize, reply, schedule, file and download emails with Axon');
+  RegWriteDWordValue(HKLM, addins, 'LoadBehavior', 3);
 end;
 
-{ Write the add-in config with both keys baked (no dot .env alongside a standalone add-in). Never
-  clobbers an existing config. }
+{ Write the add-in config with both keys baked, NEXT TO THE DLL in the install folder. A machine-wide
+  install cannot write into every user's %APPDATA%, so the keys live beside the assembly and serve all
+  users. A user who wants their own model server can still place a config.json in %APPDATA%\AxonOutlook,
+  which wins. }
 procedure WriteAddinConfig;
 var
-  dir, path, json, key, okey: String;
+  path, json, key, okey: String;
 begin
   key := '{#MistralKey}';
   okey := '{#OpenAIKey}';
-  dir := ExpandConstant('{userappdata}\AxonOutlook');
-  ForceDirectories(dir);
-  path := dir + '\config.json';
-  if FileExists(path) then exit;
+  path := ExpandConstant('{app}\config.json');
   if key = '' then
     json := '{"api_base": "https://api.openai.com/v1", "api_key": "' + okey + '", "model": "gpt-4o"}'
   else
@@ -123,8 +124,8 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
-    RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\CLSID\' + CLSID);
-    RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\' + PROGID);
-    RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Office\Outlook\AddIns\' + PROGID);
+    RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Classes\CLSID\' + CLSID);
+    RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Classes\' + PROGID);
+    RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Microsoft\Office\Outlook\AddIns\' + PROGID);
   end;
 end;

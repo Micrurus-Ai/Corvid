@@ -24,11 +24,11 @@
            Manufacturer="Axon Group"
            UpgradeCode="E7A3C1B9-2F64-4D18-9A5C-1B7E3D9F62A4">
 
-    <!-- Per-user install: no admin, everything lands in the user's profile + HKCU (same as the EXE). -->
+    <!-- Machine-wide install (needs admin): files land in C:\Program Files\Axon\Disassist and the add-in
+         registers under HKLM, so it loads for EVERY user on the PC. IT pushes this as SYSTEM. -->
     <Package InstallerVersion="500"
              Compressed="yes"
-             InstallScope="perUser"
-             InstallPrivileges="limited"
+             InstallScope="perMachine"
              Description="Axon intelligence for Outlook"
              Manufacturer="Axon Group" />
 
@@ -41,20 +41,18 @@
 
     <Property Id="ARPNOMODIFY" Value="1" />
 
+    <!-- C:\Program Files\Axon\Disassist — the DLL, its ribbon icons and config.json all live together. -->
     <Directory Id="TARGETDIR" Name="SourceDir">
-      <!-- %LOCALAPPDATA%\AxonOutlook  (the DLL loads its ribbon icons from its own folder) -->
-      <Directory Id="LocalAppDataFolder">
-        <Directory Id="INSTALLFOLDER" Name="AxonOutlook" />
-      </Directory>
-      <!-- %APPDATA%\AxonOutlook  (config.json, same location LoadConfig reads) -->
-      <Directory Id="AppDataFolder">
-        <Directory Id="CONFIGFOLDER" Name="AxonOutlook" />
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="AxonFolder" Name="Axon">
+          <Directory Id="INSTALLFOLDER" Name="Disassist" />
+        </Directory>
       </Directory>
     </Directory>
 
     <!-- 1. The add-in DLL + its ribbon icons. -->
     <DirectoryRef Id="INSTALLFOLDER">
-      <Component Id="AddinFiles" Guid="1C4E9A72-3B85-4F16-9D28-6A1B3E5C7D90">
+      <Component Id="AddinFiles" Win64="yes" Guid="1C4E9A72-3B85-4F16-9D28-6A1B3E5C7D90">
         <File Id="AxonAddinDll" Name="AxonAddin.dll" Source="..\outlook_addin\AxonAddin.dll" KeyPath="yes" />
         <File Name="axon-move.png"      Source="..\outlook_addin\axon-move.png" />
         <File Name="axon-download.png"  Source="..\outlook_addin\axon-download.png" />
@@ -68,12 +66,12 @@
         <File Name="axon-settings.png"  Source="..\outlook_addin\axon-settings.png" />
       </Component>
 
-      <!-- 2. Managed COM registration under HKCU (identical keys to the Inno RegisterAddin). -->
-      <Component Id="ComRegistration" Guid="2D5F0B83-4C96-4A27-8E39-7B2C4F6D8E01">
-        <RegistryKey Root="HKCU" Key="Software\Classes\Axon.OutlookAddin\CLSID">
+      <!-- 2. Managed COM registration under HKLM (machine-wide, 64-bit view for 64-bit Outlook). -->
+      <Component Id="ComRegistration" Win64="yes" Guid="2D5F0B83-4C96-4A27-8E39-7B2C4F6D8E01">
+        <RegistryKey Root="HKLM" Key="Software\Classes\Axon.OutlookAddin\CLSID">
           <RegistryValue Type="string" Value="{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}" KeyPath="yes" />
         </RegistryKey>
-        <RegistryKey Root="HKCU" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\InprocServer32">
+        <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\InprocServer32">
           <RegistryValue Type="string" Value="[System64Folder]mscoree.dll" />
           <RegistryValue Type="string" Name="ThreadingModel" Value="Both" />
           <RegistryValue Type="string" Name="Class"          Value="Axon.OutlookAddin.Connect" />
@@ -81,32 +79,30 @@
           <RegistryValue Type="string" Name="RuntimeVersion" Value="v4.0.30319" />
           <RegistryValue Type="string" Name="CodeBase"       Value="file:///[#AxonAddinDll]" />
         </RegistryKey>
-        <RegistryKey Root="HKCU" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\InprocServer32\0.0.0.0">
+        <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\InprocServer32\0.0.0.0">
           <RegistryValue Type="string" Name="Class"          Value="Axon.OutlookAddin.Connect" />
           <RegistryValue Type="string" Name="Assembly"       Value="AxonAddin, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null" />
           <RegistryValue Type="string" Name="RuntimeVersion" Value="v4.0.30319" />
           <RegistryValue Type="string" Name="CodeBase"       Value="file:///[#AxonAddinDll]" />
         </RegistryKey>
-        <RegistryKey Root="HKCU" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\ProgId">
+        <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\ProgId">
           <RegistryValue Type="string" Value="Axon.OutlookAddin" />
         </RegistryKey>
       </Component>
 
-      <!-- 3. Tell Outlook to load it. -->
-      <Component Id="OutlookAddinReg" Guid="3E60A194-5D07-4B38-9F4A-8C3D5E7F9012">
-        <RegistryKey Root="HKCU" Key="Software\Microsoft\Office\Outlook\AddIns\Axon.OutlookAddin">
+      <!-- 3. Tell Outlook to load it, for every user on this PC (HKLM add-in list). -->
+      <Component Id="OutlookAddinReg" Win64="yes" Guid="3E60A194-5D07-4B38-9F4A-8C3D5E7F9012">
+        <RegistryKey Root="HKLM" Key="Software\Microsoft\Office\Outlook\AddIns\Axon.OutlookAddin">
           <RegistryValue Type="integer" Name="LoadBehavior"  Value="3" KeyPath="yes" />
           <RegistryValue Type="string"  Name="FriendlyName"  Value="Axon intelligence" />
           <RegistryValue Type="string"  Name="Description"   Value="Summarize, reply, schedule, file and download emails with Axon" />
         </RegistryKey>
       </Component>
-    </DirectoryRef>
 
-    <!-- 4. config.json with both keys baked. The standalone add-in reads its ONLY keys from here, and
-         nothing at runtime writes this file (Settings/tone/archive use separate files), so we always
-         install it. That also dodges the NeverOverwrite+MajorUpgrade quirk that can drop the file. -->
-    <DirectoryRef Id="CONFIGFOLDER">
-      <Component Id="ConfigFile" Guid="4F71B2A5-6E18-4C49-A05B-9D4E6F801123">
+      <!-- 4. config.json with both keys baked, NEXT TO THE DLL so every user on the PC reads it
+           (a machine install can't write into each user's %APPDATA%). A user who wants their own
+           model server can still drop a config.json in %APPDATA%\AxonOutlook, which wins. -->
+      <Component Id="ConfigFile" Win64="yes" Guid="4F71B2A5-6E18-4C49-A05B-9D4E6F801123">
         <File Id="ConfigJson" Name="config.json" Source="$(var.StagedConfig)" KeyPath="yes" />
       </Component>
     </DirectoryRef>
