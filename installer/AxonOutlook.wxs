@@ -17,7 +17,11 @@
     light.exe  -sval AxonOutlook.wixobj -o Axon-Outlook.msi
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*"
+  <!-- STABLE ProductCode (not '*'). An auto ProductCode changes every build, so the code an RMM
+       captured goes stale and its uninstall fails with 1605 (ERROR_UNKNOWN_PRODUCT). Keep this fixed
+       for the whole 1.0.x line; mint a NEW ProductCode only when the Version's first three parts change
+       (MajorUpgrade then removes the old one cleanly). -->
+  <Product Id="A7F3E9C1-5B24-4D68-9E1A-3C7B5F2D8A04"
            Name="Axon Outlook add-in"
            Language="1033"
            Version="$(var.Version)"
@@ -32,14 +36,34 @@
              Description="Axon intelligence for Outlook"
              Manufacturer="Axon Group" />
 
-    <!-- AllowSameVersionUpgrades: each build mints a new ProductCode (Id="*"), so without this a
-         re-push of the SAME version installs a second copy alongside the first instead of replacing
-         it. With it, any install (same or higher version) cleanly replaces what's there. -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"
                   DowngradeErrorMessage="A newer version of the Axon Outlook add-in is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- Close Outlook BEFORE the file-in-use check (InstallValidate). If we wait until later, Windows
+         Installer's Restart Manager has already shut Outlook down to free AxonAddin.dll and then RESTARTS
+         it at the end of the transaction — so it comes back after "uninstall" and its handles keep the
+         %APPDATA%\AxonOutlook residue locked. Killing it up front means Restart Manager never engages.
+         Immediate action so it runs before InstallValidate; runs elevated (SYSTEM for an RMM push, the
+         elevated admin for an interactive uninstall) — both can kill Outlook. Ask nicely, give it ~3s to
+         save, then force. Only on uninstall/upgrade (the DLL is locked then), never on a first install. -->
+    <CustomAction Id="KillOutlook" Directory="TARGETDIR" Execute="immediate" Return="ignore"
+                  ExeCommand='cmd.exe /c taskkill /im OUTLOOK.EXE &amp; ping -n 4 127.0.0.1 &amp; taskkill /f /im OUTLOOK.EXE' />
+
+    <!-- Wipe the per-user runtime data the add-in creates at run time (%APPDATA%\AxonOutlook: learned
+         tone, archive memory, reminders). No installer ever tracked it, so it is what gets left behind.
+         Runs as SYSTEM across every user profile, and ONLY on a real uninstall (not during an upgrade,
+         which would otherwise delete a user's data on every version bump). Working dir is TARGETDIR (the
+         drive root), NOT the install folder — RemoveFiles has already deleted the install folder by the
+         time this runs, and cmd.exe cannot launch with a working directory that no longer exists. -->
+    <CustomAction Id="CleanResidue" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
+                  ExeCommand='cmd.exe /c for /d %A in ("%SystemDrive%\Users\*") do @rd /s /q "%A\AppData\Roaming\AxonOutlook" 2&gt;nul' />
+    <InstallExecuteSequence>
+      <Custom Action="KillOutlook"  Before="InstallValidate">REMOVE="ALL" OR WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="CleanResidue" After="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
 
     <!-- C:\Program Files\Axon\Disassist — the DLL, its ribbon icons and config.json all live together. -->
     <Directory Id="TARGETDIR" Name="SourceDir">

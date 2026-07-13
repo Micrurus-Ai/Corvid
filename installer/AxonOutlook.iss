@@ -142,6 +142,46 @@ begin
   end;
 end;
 
+{ Close Outlook before we remove files. It holds AxonAddin.dll and keeps handles in the per-user data
+  folder, so without this the DLL and the residue get left behind. Ask nicely, give it a moment to
+  save, then force. }
+procedure CloseOutlook;
+var rc: Integer;
+begin
+  Exec('taskkill.exe', '/im OUTLOOK.EXE', '', SW_HIDE, ewWaitUntilTerminated, rc);
+  Sleep(3000);
+  Exec('taskkill.exe', '/f /im OUTLOOK.EXE', '', SW_HIDE, ewWaitUntilTerminated, rc);
+end;
+
+{ Remove the per-user runtime data (%APPDATA%\AxonOutlook: learned tone, archive memory, reminders)
+  from EVERY user profile — the machine install never tracked it, so it is the residue left behind. }
+procedure CleanResidueAllUsers;
+var
+  rec: TFindRec;
+  users, folder: String;
+begin
+  users := ExpandConstant('{sd}\Users');
+  if FindFirst(users + '\*', rec) then
+  try
+    repeat
+      if (rec.Attributes and FILE_ATTRIBUTE_DIRECTORY <> 0) and (rec.Name <> '.') and (rec.Name <> '..') then
+      begin
+        folder := users + '\' + rec.Name + '\AppData\Roaming\AxonOutlook';
+        if DirExists(folder) then DelTree(folder, True, True, True);
+      end;
+    until not FindNext(rec);
+  finally
+    FindClose(rec);
+  end;
+end;
+
+{ Uninstall runs elevated (admin), so it can reach HKLM and every user's profile. }
+function InitializeUninstall(): Boolean;
+begin
+  CloseOutlook;
+  Result := True;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
@@ -150,4 +190,6 @@ begin
     RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Classes\' + PROGID);
     RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Microsoft\Office\Outlook\AddIns\' + PROGID);
   end;
+  if CurUninstallStep = usPostUninstall then
+    CleanResidueAllUsers;
 end;
