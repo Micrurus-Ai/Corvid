@@ -182,9 +182,10 @@ namespace Axon.OutlookAddin
             string tone = MyToneGuide();
             string toneLine = string.IsNullOrEmpty(tone) ? "" : " IMPORTANT: write in the USER'S OWN VOICE, following this style profile exactly — same greeting, sign-off, vocabulary, recurring phrases, punctuation and level of formality, so it reads as if the user wrote it themselves:\n" + tone + "\n";
             return how + threadLine + " Begin with an appropriate greeting addressed to the sender by first " +
-                   "name, and end with a courteous sign-off" + (string.IsNullOrWhiteSpace(me) ? "" : " from " + me) + ". " +
-                   langLine + toneLine + " Use a natural tone. Output ONLY the reply text itself (greeting, " +
-                   "message, sign-off) — no subject line and no quoted original.\n\n" +
+                   "name, and end with a short closing line such as 'Kind regards,' (matching the user's usual " +
+                   "sign-off phrase). " + langLine + toneLine + NoSignatureLine +
+                   " Use a natural tone. Output ONLY the reply text itself (greeting, message, closing line) — " +
+                   "no subject line and no quoted original.\n\n" +
                    "Sender: " + sender + "\nSubject: " + subject + "\n\n" + body;
         }
 
@@ -695,8 +696,8 @@ namespace Axon.OutlookAddin
             string tone = MyToneGuide();
             string toneLine = string.IsNullOrEmpty(tone) ? "" : " IMPORTANT: write in the USER'S OWN VOICE, following this style profile exactly — same greeting, sign-off, vocabulary, recurring phrases, punctuation and level of formality, so it reads as if the user wrote it themselves:\n" + tone + "\n";
             return "Write a complete, professional email based on this description from the user:\n" + instruction +
-                   "\n\nBegin with an appropriate greeting and end with a courteous sign-off" +
-                   (string.IsNullOrWhiteSpace(me) ? "" : " from " + me) + ". " + langLine + toneLine +
+                   "\n\nBegin with an appropriate greeting and end with a short closing line such as 'Kind regards,' " +
+                   "(matching the user's usual sign-off phrase). " + langLine + toneLine + NoSignatureLine +
                    " At the very top, output these header lines, each on its own line:\n" +
                    "To: <main recipient(s)>\n" +
                    "Cc: <anyone the user asked to copy — include ONLY if the description mentions people to Cc, else omit this line>\n" +
@@ -706,8 +707,16 @@ namespace Axon.OutlookAddin
                    "'bcc'/'blind copy' goes in Bcc. " +
                    "For recipients you may write just the person's NAME (e.g. 'Jan Peeters') — do not invent an email " +
                    "address; Outlook will look it up in the address book. Separate multiple recipients with semicolons. " +
-                   "Then a blank line, then the email body (greeting by first name, message, sign-off). Output only that — no notes.";
+                   "Then a blank line, then the email body (greeting by first name, message, closing line). Output only that — no notes.";
         }
+
+        // Outlook appends the user's OWN signature (name, title, company, phone, logo) to every new mail
+        // and reply, so the draft must not add one too — otherwise the name/signature appears twice. End
+        // at the closing salutation and stop.
+        private const string NoSignatureLine =
+            " Do NOT add the sender's name after the closing line, and do NOT add any job title, company " +
+            "name, phone number, address, website or signature block — Outlook automatically appends the " +
+            "user's own signature. Stop right after the closing salutation.";
 
         public void OnSendLater(object control)
         {
