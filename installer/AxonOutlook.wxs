@@ -17,11 +17,10 @@
     light.exe  -sval AxonOutlook.wixobj -o Axon-Outlook.msi
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <!-- STABLE ProductCode (not '*'). An auto ProductCode changes every build, so the code an RMM
-       captured goes stale and its uninstall fails with 1605 (ERROR_UNKNOWN_PRODUCT). Keep this fixed
-       for the whole 1.0.x line; mint a NEW ProductCode only when the Version's first three parts change
-       (MajorUpgrade then removes the old one cleanly). -->
-  <Product Id="A7F3E9C1-5B24-4D68-9E1A-3C7B5F2D8A04"
+  <!-- ProductCode comes from build-msi.ps1, derived from the version: stable per version (so an RMM's
+       captured code stays valid and uninstall-by-code never 1605s), and distinct across versions (so
+       MajorUpgrade removes the old build instead of stacking a second copy). -->
+  <Product Id="$(var.ProductCode)"
            Name="Axon Outlook add-in"
            Language="1033"
            Version="$(var.Version)"

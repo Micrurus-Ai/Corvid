@@ -7,10 +7,17 @@
 
 $ErrorActionPreference = "Stop"
 
-# ---- Bump the add-in version HERE. It drives both the .msi filename and the version IT sees in
-# ---- Add/Remove Programs. Windows Installer compares the first three parts, so bump one of those
-# ---- (e.g. 1.0.1) for an upgrade to replace an older install.
-$Version = "1.0.0"
+# ---- Bump the add-in version HERE (drives the .msi filename and the version IT sees). ----
+# Windows Installer compares only the FIRST THREE fields of the version. Because AllowSameVersionUpgrades
+# is on and every version gets its own ProductCode (below), bumping the 4th field alone (1.0.0.0 ->
+# 1.0.0.1) still upgrades cleanly — the new ProductCode is what makes MajorUpgrade replace the old one.
+$Version = "1.0.0.1"
+
+# ProductCode derived from the version: SAME for every rebuild of a version (so an RMM's captured code
+# stays valid and uninstall-by-code never 1605s), DIFFERENT the moment the version changes (so the new
+# build replaces the old instead of stacking). Deterministic hash -> no table to maintain.
+$hash = [Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes("AxonOutlook/$Version"))
+$ProductCode = "{" + ([guid]::new($hash)).Guid.ToUpper() + "}"
 
 $root  = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $inst  = Join-Path $root "installer"
@@ -51,7 +58,7 @@ $msi    = Join-Path $out "Axon-Outlook-$Version.msi"
 # Drop stale versioned MSIs so Output only ever holds the current build.
 Get-ChildItem (Join-Path $out "Axon-Outlook*.msi") -EA SilentlyContinue | Remove-Item -Force -EA SilentlyContinue
 
-& $candle -nologo -arch x64 "-dStagedConfig=$staged" "-dVersion=$Version.0" -out $wixobj (Join-Path $inst "AxonOutlook.wxs")
+& $candle -nologo -arch x64 "-dStagedConfig=$staged" "-dVersion=$Version" "-dProductCode=$ProductCode" -out $wixobj (Join-Path $inst "AxonOutlook.wxs")
 if ($LASTEXITCODE -ne 0) { throw "candle failed." }
 # -sval: skip ICE validation (per-user profile-dir keypaths trip harmless ICE warnings).
 & $light -nologo -sval -b $inst -out $msi $wixobj
