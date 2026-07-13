@@ -66,10 +66,11 @@ const
   PROGID = 'Axon.OutlookAddin';
   ASM    = 'AxonAddin, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null';
 
-{ Register the managed COM Outlook add-in MACHINE-WIDE (HKLM), so it loads for every user on the PC.
-  Plain strings avoid the [Registry] GUID-brace parsing problem, and on a 64-bit OS this writes the
-  64-bit view Outlook reads. }
-procedure RegisterAddin;
+{ Register the managed COM Outlook add-in MACHINE-WIDE (HKLM) in ONE registry view. The AnyCPU DLL
+  runs in either bitness; only the view and the CLR loader differ. Called twice: the 64-bit view with
+  the 64-bit mscoree (for 64-bit Outlook), and the 32-bit view with SysWOW64\mscoree (for 32-bit
+  Outlook). Plain strings avoid the [Registry] GUID-brace parsing problem. }
+procedure RegisterAddinView(root: Integer; mscoree: String);
 var
   code, clsKey, inproc, addins: String;
 begin
@@ -77,26 +78,33 @@ begin
   StringChangeEx(code, '\', '/', True);
   code := 'file:///' + code;
 
-  RegWriteStringValue(HKLM, 'Software\Classes\' + PROGID + '\CLSID', '', CLSID);
+  RegWriteStringValue(root, 'Software\Classes\' + PROGID + '\CLSID', '', CLSID);
 
   clsKey := 'Software\Classes\CLSID\' + CLSID;
   inproc := clsKey + '\InprocServer32';
-  RegWriteStringValue(HKLM, inproc, '', ExpandConstant('{sys}\mscoree.dll'));
-  RegWriteStringValue(HKLM, inproc, 'ThreadingModel', 'Both');
-  RegWriteStringValue(HKLM, inproc, 'Class', 'Axon.OutlookAddin.Connect');
-  RegWriteStringValue(HKLM, inproc, 'Assembly', ASM);
-  RegWriteStringValue(HKLM, inproc, 'RuntimeVersion', 'v4.0.30319');
-  RegWriteStringValue(HKLM, inproc, 'CodeBase', code);
-  RegWriteStringValue(HKLM, inproc + '\0.0.0.0', 'Class', 'Axon.OutlookAddin.Connect');
-  RegWriteStringValue(HKLM, inproc + '\0.0.0.0', 'Assembly', ASM);
-  RegWriteStringValue(HKLM, inproc + '\0.0.0.0', 'RuntimeVersion', 'v4.0.30319');
-  RegWriteStringValue(HKLM, inproc + '\0.0.0.0', 'CodeBase', code);
-  RegWriteStringValue(HKLM, clsKey + '\ProgId', '', PROGID);
+  RegWriteStringValue(root, inproc, '', mscoree);
+  RegWriteStringValue(root, inproc, 'ThreadingModel', 'Both');
+  RegWriteStringValue(root, inproc, 'Class', 'Axon.OutlookAddin.Connect');
+  RegWriteStringValue(root, inproc, 'Assembly', ASM);
+  RegWriteStringValue(root, inproc, 'RuntimeVersion', 'v4.0.30319');
+  RegWriteStringValue(root, inproc, 'CodeBase', code);
+  RegWriteStringValue(root, inproc + '\0.0.0.0', 'Class', 'Axon.OutlookAddin.Connect');
+  RegWriteStringValue(root, inproc + '\0.0.0.0', 'Assembly', ASM);
+  RegWriteStringValue(root, inproc + '\0.0.0.0', 'RuntimeVersion', 'v4.0.30319');
+  RegWriteStringValue(root, inproc + '\0.0.0.0', 'CodeBase', code);
+  RegWriteStringValue(root, clsKey + '\ProgId', '', PROGID);
 
   addins := 'Software\Microsoft\Office\Outlook\AddIns\' + PROGID;
-  RegWriteStringValue(HKLM, addins, 'FriendlyName', 'Axon intelligence');
-  RegWriteStringValue(HKLM, addins, 'Description', 'Summarize, reply, schedule, file and download emails with Axon');
-  RegWriteDWordValue(HKLM, addins, 'LoadBehavior', 3);
+  RegWriteStringValue(root, addins, 'FriendlyName', 'Axon intelligence');
+  RegWriteStringValue(root, addins, 'Description', 'Summarize, reply, schedule, file and download emails with Axon');
+  RegWriteDWordValue(root, addins, 'LoadBehavior', 3);
+end;
+
+{ Register in BOTH views so the same installer works on 32-bit and 64-bit Office. }
+procedure RegisterAddin;
+begin
+  RegisterAddinView(HKLM64, ExpandConstant('{win}\System32\mscoree.dll'));
+  RegisterAddinView(HKLM32, ExpandConstant('{win}\SysWOW64\mscoree.dll'));
 end;
 
 { Write the add-in config with both keys baked, NEXT TO THE DLL in the install folder. A machine-wide
@@ -186,9 +194,13 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
-    RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Classes\CLSID\' + CLSID);
-    RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Classes\' + PROGID);
-    RegDeleteKeyIncludingSubkeys(HKLM, 'Software\Microsoft\Office\Outlook\AddIns\' + PROGID);
+    { Remove BOTH registry views (32-bit and 64-bit), since we register in both. }
+    RegDeleteKeyIncludingSubkeys(HKLM64, 'Software\Classes\CLSID\' + CLSID);
+    RegDeleteKeyIncludingSubkeys(HKLM64, 'Software\Classes\' + PROGID);
+    RegDeleteKeyIncludingSubkeys(HKLM64, 'Software\Microsoft\Office\Outlook\AddIns\' + PROGID);
+    RegDeleteKeyIncludingSubkeys(HKLM32, 'Software\Classes\CLSID\' + CLSID);
+    RegDeleteKeyIncludingSubkeys(HKLM32, 'Software\Classes\' + PROGID);
+    RegDeleteKeyIncludingSubkeys(HKLM32, 'Software\Microsoft\Office\Outlook\AddIns\' + PROGID);
   end;
   if CurUninstallStep = usPostUninstall then
     CleanResidueAllUsers;

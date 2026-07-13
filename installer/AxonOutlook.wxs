@@ -122,6 +122,40 @@
         </RegistryKey>
       </Component>
 
+      <!-- 2b + 3b. The SAME registration in the 32-bit view (Wow6432Node), so 32-bit Outlook finds it
+           too. The add-in DLL is AnyCPU, so it runs in either bitness; only the registry entries differ.
+           Win64="no" writes to the 32-bit view, and the 32-bit CLR loader is SysWOW64\mscoree.dll (a
+           64-bit mscoree cannot load into a 32-bit Outlook). Harmless on 64-bit-only machines. -->
+      <Component Id="ComRegistration32" Win64="no" Guid="7C93E5D8-8A40-4E6C-B27D-5F0A7B912345">
+        <RegistryKey Root="HKLM" Key="Software\Classes\Axon.OutlookAddin\CLSID">
+          <RegistryValue Type="string" Value="{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}" KeyPath="yes" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\InprocServer32">
+          <RegistryValue Type="string" Value="[WindowsFolder]SysWOW64\mscoree.dll" />
+          <RegistryValue Type="string" Name="ThreadingModel" Value="Both" />
+          <RegistryValue Type="string" Name="Class"          Value="Axon.OutlookAddin.Connect" />
+          <RegistryValue Type="string" Name="Assembly"       Value="AxonAddin, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null" />
+          <RegistryValue Type="string" Name="RuntimeVersion" Value="v4.0.30319" />
+          <RegistryValue Type="string" Name="CodeBase"       Value="file:///[#AxonAddinDll]" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\InprocServer32\0.0.0.0">
+          <RegistryValue Type="string" Name="Class"          Value="Axon.OutlookAddin.Connect" />
+          <RegistryValue Type="string" Name="Assembly"       Value="AxonAddin, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null" />
+          <RegistryValue Type="string" Name="RuntimeVersion" Value="v4.0.30319" />
+          <RegistryValue Type="string" Name="CodeBase"       Value="file:///[#AxonAddinDll]" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{7B2C9E14-6A3D-4F58-9C21-3E5A1B7D4F60}\ProgId">
+          <RegistryValue Type="string" Value="Axon.OutlookAddin" />
+        </RegistryKey>
+      </Component>
+      <Component Id="OutlookAddinReg32" Win64="no" Guid="8D04F6E9-9B51-4F7D-C38E-6A1B8C023456">
+        <RegistryKey Root="HKLM" Key="Software\Microsoft\Office\Outlook\AddIns\Axon.OutlookAddin">
+          <RegistryValue Type="integer" Name="LoadBehavior"  Value="3" KeyPath="yes" />
+          <RegistryValue Type="string"  Name="FriendlyName"  Value="Axon intelligence" />
+          <RegistryValue Type="string"  Name="Description"   Value="Summarize, reply, schedule, file and download emails with Axon" />
+        </RegistryKey>
+      </Component>
+
       <!-- 4. config.json with both keys baked, NEXT TO THE DLL so every user on the PC reads it
            (a machine install can't write into each user's %APPDATA%). A user who wants their own
            model server can still drop a config.json in %APPDATA%\AxonOutlook, which wins. -->
@@ -156,6 +190,8 @@
       <ComponentRef Id="AddinFiles" />
       <ComponentRef Id="ComRegistration" />
       <ComponentRef Id="OutlookAddinReg" />
+      <ComponentRef Id="ComRegistration32" />
+      <ComponentRef Id="OutlookAddinReg32" />
       <ComponentRef Id="ConfigFile" />
       <ComponentRef Id="CleanupPerUser" />
       <ComponentRef Id="ActiveSetupCleanup" />
