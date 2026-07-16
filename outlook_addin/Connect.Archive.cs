@@ -108,7 +108,7 @@ namespace Axon.OutlookAddin
                         _archiveBaseDir = baseDir;
                         _archiveCompany = company;
                         System.Collections.Generic.List<string> matches, existing, reasons; string newRel;
-                        BuildArchiveSuggestions(baseDir, subject, sender, body, year, company, sap,
+                        BuildArchiveSuggestions(baseDir, subject, sender, body, year, company, sap, code,
                                                 out matches, out reasons, out newRel, out existing);
                         picker.SetFolders(existing.ToArray());
                         picker.SetSuggestions(matches.ToArray(), reasons.ToArray(), newRel);
@@ -204,19 +204,28 @@ namespace Axon.OutlookAddin
             string sender = ""; try { sender = (string)mail.SenderName; } catch { }
             string senderEmail = ""; try { senderEmail = (string)mail.SenderEmailAddress; } catch { }
             string body = ""; try { body = (string)mail.Body; } catch { }
-            if (body.Length > 4000) body = body.Substring(0, 4000);
+            if (body.Length > 6000) body = body.Substring(0, 6000);
             var js = new System.Web.Script.Serialization.JavaScriptSerializer();
             string mapJson = js.Serialize(cfg.Codes);
             string labels = js.Serialize(cfg.Labels);
             string prompt =
                 "Read this email and reply with ONLY JSON: {\"category\":\"\",\"code\":\"\",\"company\":\"\"," +
-                "\"year\":\"\",\"sap\":\"\"}. \"category\" = which ONE of the user's archive folders this email belongs in " +
-                "(choose exactly one label from this list, or empty if none clearly fits): " + labels + ". " +
-                "Determine the sender's COUNTRY from the email domain, any phone numbers " +
-                "(+32 Belgium, +49 Germany, +31 Netherlands, +33 France, etc.), and address, then set \"code\" using this " +
-                "Country->code map: " + mapJson + " (empty if the country isn't in the map). \"company\" = the sender's " +
-                "company name. \"year\" = a 4-digit year from the email, else the current year. \"sap\" = the order/" +
-                "SAP number in the subject if there is one, else empty.\n\nFrom: " + sender + " <" + senderEmail + ">\n" +
+                "\"year\":\"\",\"sap\":\"\"}.\n" +
+                "IMPORTANT: this email may be FORWARDED (subject starts with FW/FWD/TR/Doorst, or the body " +
+                "quotes an earlier message). If so, the party this email is ABOUT is the ORIGINAL EXTERNAL " +
+                "client/company discussed in it, NOT the colleague who forwarded it. Identify that external " +
+                "client and use IT for company and country, reading the forwarded content, signatures and any " +
+                "quoted 'From:' line, not just the visible sender.\n" +
+                "\"category\" = which ONE of the user's archive folders this email belongs in (choose exactly one " +
+                "label from this list, or empty if none clearly fits): " + labels + ".\n" +
+                "\"company\" = the external client's company name.\n" +
+                "\"code\" = that client's COUNTRY code. Determine the client's country from their email domain, " +
+                "phone numbers (+32 Belgium, +49 Germany, +31 Netherlands, +33 France, etc.), address or signature, " +
+                "then map it with this Country->code map: " + mapJson + " (empty if the country isn't in the map).\n" +
+                "\"sap\" = the order or SAP number, usually the leading number in the subject (for a subject like " +
+                "'FW: NNNNN - description' that would be NNNNN). Empty if there is none.\n" +
+                "\"year\" = a 4-digit year from the email, else the current year.\n\n" +
+                "Visible sender (may be an internal forwarder): " + sender + " <" + senderEmail + ">\n" +
                 "Subject: " + subject + "\n\n" + body;
             string text = ModelComplete(prompt, 0);
             var m = System.Text.RegularExpressions.Regex.Match(text ?? "", "\\{[\\s\\S]*\\}");
@@ -240,25 +249,29 @@ namespace Axon.OutlookAddin
             return bas;
         }
 
+        // Axon Group's Sales archive follows a fixed shape: base \ {code} \ SOP \ {year} \ {client} \
+        // {order} \ {category}. So instead of searching the (slow, huge) share we NAVIGATE straight down
+        // it — one immediate-child listing per level, ~10 ms each. SOP is the orders folder; the code
+        // comes from the country map; year/client/order are read from the email and matched to the folder.
+        // The per-order category folders (Documents, Order, Quotation, MC/MI/MS...) vary between orders, so
+        // we scan just that ONE order (cheap) and let the user pick. The picker always lets them choose a
+        // different folder, so a wrong guess is never a dead end.
+        private const string OrdersTypeFolder = "SOP";
+
         private void BuildArchiveSuggestions(string baseDir, string subject, string sender, string body,
-            string year, string company, string sap,
+            string year, string company, string sap, string code,
             out System.Collections.Generic.List<string> matches, out System.Collections.Generic.List<string> reasons,
             out string newRel, out System.Collections.Generic.List<string> existing)
         {
-            var mm = new System.Collections.Generic.List<string>();   // locals so the lambda can capture them
+            var mm = new System.Collections.Generic.List<string>();
             var rr = new System.Collections.Generic.List<string>();
-            matches = mm;
-            reasons = rr;
+            matches = mm; reasons = rr;
             existing = new System.Collections.Generic.List<string>();
-            var parts = new System.Collections.Generic.List<string>();
-            if (!string.IsNullOrWhiteSpace(year)) parts.Add(year);
-            if (!string.IsNullOrWhiteSpace(company)) parts.Add(company);
-            if (!string.IsNullOrWhiteSpace(sap)) parts.Add(sap);
-            newRel = string.Join("\\", parts);
+            newRel = "";
 
             Action<string, string> add = (rel, why) =>
             {
-                if (string.IsNullOrEmpty(rel) || mm.Count >= 5) return;
+                if (string.IsNullOrEmpty(rel) || mm.Count >= 6) return;
                 foreach (var m in mm) if (string.Equals(m, rel, StringComparison.OrdinalIgnoreCase)) return;
                 mm.Add(rel); rr.Add(why);
             };
@@ -266,39 +279,144 @@ namespace Axon.OutlookAddin
             try
             {
                 if (!Directory.Exists(baseDir)) return;
-                CollectDirs(baseDir, baseDir, 0, 3, existing);
-                var existingSet = new System.Collections.Generic.HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                const int budgetMs = 6000;
 
-                // #1 Memory: if this client's mail was filed somewhere before and it still exists, lead with it.
-                string remembered = RememberedFolder(company);
-                if (!string.IsNullOrEmpty(remembered) && existingSet.Contains(remembered))
-                    add(remembered, "filed here before");
-
-                // Preferred: let the AI pick where THIS email belongs (understands client + topic).
-                string aiNew;
-                System.Collections.Generic.List<string> aiReasons;
-                var aiMatches = RankArchiveViaApi(subject, sender, body, company, existing, out aiReasons, out aiNew);
-                if (aiMatches != null && aiMatches.Count > 0)
+                // --- Deterministic descent: one listing per level, straight down the known template. ---
+                string dir = baseDir;
+                string codeDir   = FindChild(dir, code, true);        if (codeDir   != null) dir = codeDir;   // Sales\AB
+                string sopDir    = FindChild(dir, OrdersTypeFolder, true); if (sopDir != null) dir = sopDir;   // ...\SOP
+                string yearDir   = FindChild(dir, year, false);       if (yearDir   != null) dir = yearDir;   // ...\2026 (14334-)
+                string clientDir = FindChild(dir, company, false);    if (clientDir != null) dir = clientDir; // ...\Voestalpine
+                string orderDir  = FindChild(dir, sap, false);        // ...\14457_ADD low noise
+                // Fallback: if the client wasn't identified (e.g. a forward), the order sits a level or two
+                // below where we stopped — a small bounded search from here still finds it by its number.
+                if (orderDir == null && !string.IsNullOrEmpty(sap))
                 {
-                    for (int i = 0; i < aiMatches.Count; i++)
-                        add(aiMatches[i], i < aiReasons.Count ? aiReasons[i] : "best match");
-                    if (!string.IsNullOrWhiteSpace(aiNew)) newRel = aiNew;
-                    if (matches.Count > 0) return;
+                    orderDir = FindDescendant(dir, sap, 2, sw, budgetMs);
+                    if (orderDir != null && clientDir == null)
+                        try { clientDir = System.IO.Directory.GetParent(orderDir).FullName; } catch { }
                 }
 
-                // Fallback: keyword scoring. Require a real signal (SAP or client name); a bare year match
-                // is too weak on its own, so it no longer floods the list with every "2025" folder.
-                var scored = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<int, string>>();
-                foreach (var rel in existing)
+                if (orderDir != null)
                 {
-                    int s = 0;
-                    if (!string.IsNullOrEmpty(sap) && rel.IndexOf(sap, StringComparison.OrdinalIgnoreCase) >= 0) s += 100;
-                    if (!string.IsNullOrEmpty(company) && rel.IndexOf(company, StringComparison.OrdinalIgnoreCase) >= 0) s += 10;
-                    if (!string.IsNullOrEmpty(year) && rel.IndexOf(year, StringComparison.Ordinal) >= 0) s += 1;
-                    if (s >= 10) scored.Add(new System.Collections.Generic.KeyValuePair<int, string>(s, rel));
+                    // Found the order. Offer it and its own subfolders (the categories) for the user to pick.
+                    AddRel(baseDir, orderDir, existing);
+                    CollectSubtreeRel(baseDir, orderDir, 3, existing, sw, budgetMs);
+                    // Also list the client's OTHER orders, so picking a different order is easy.
+                    if (clientDir != null) CollectSubtreeRel(baseDir, clientDir, 1, existing, sw, budgetMs);
+
+                    // Suggestions: where this client was filed before (if under this order), then the order
+                    // folder itself, then its immediate category subfolders.
+                    string remembered = RememberedFolder(company);
+                    if (!string.IsNullOrEmpty(remembered) && existing.Contains(remembered)) add(remembered, "filed here before");
+                    string orderRel = RelOf(baseDir, orderDir);
+                    add(orderRel, "this order");
+                    foreach (var rel in existing)
+                        if (rel.StartsWith(orderRel + "\\", StringComparison.OrdinalIgnoreCase)
+                            && rel.Split('\\').Length == orderRel.Split('\\').Length + 1)
+                            add(rel, "category");
                 }
-                scored.Sort((a, b) => b.Key.CompareTo(a.Key));
-                foreach (var kv in scored) add(kv.Value, kv.Key >= 100 ? "order number" : "client match");
+                else
+                {
+                    // Order folder not there yet. Show what IS at the deepest level we reached so the user
+                    // can pick or navigate, and propose a new order folder that follows the template.
+                    CollectSubtreeRel(baseDir, dir, 1, existing, sw, budgetMs);
+
+                    string deepest; var tail = new System.Collections.Generic.List<string>();
+                    if (clientDir != null)   { deepest = clientDir; tail.Add(sap); }
+                    else if (yearDir != null){ deepest = yearDir;   tail.Add(company); tail.Add(sap); }
+                    else if (sopDir != null) { deepest = sopDir;    tail.Add(year); tail.Add(company); tail.Add(sap); }
+                    else if (codeDir != null){ deepest = codeDir;   tail.Add(OrdersTypeFolder); tail.Add(year); tail.Add(company); tail.Add(sap); }
+                    else                     { deepest = baseDir;   tail.Add(code); tail.Add(OrdersTypeFolder); tail.Add(year); tail.Add(company); tail.Add(sap); }
+                    var relParts = new System.Collections.Generic.List<string>();
+                    string dr = RelOf(baseDir, deepest); if (!string.IsNullOrEmpty(dr)) relParts.Add(dr);
+                    foreach (var t in tail) if (!string.IsNullOrWhiteSpace(t)) relParts.Add(t.Trim());
+                    newRel = string.Join("\\", relParts);
+                }
+            }
+            catch { }
+        }
+
+        // Return the immediate child of `dir` best matching `needle`: exact name first, then starts-with,
+        // then contains (all case-insensitive). One directory listing; null if none / dir unreadable.
+        private static string FindChild(string dir, string needle, bool exactOnly)
+        {
+            if (string.IsNullOrWhiteSpace(dir) || string.IsNullOrWhiteSpace(needle)) return null;
+            string[] subs; try { subs = Directory.GetDirectories(dir); } catch { return null; }
+            string starts = null, contains = null;
+            foreach (var s in subs)
+            {
+                string n = Path.GetFileName(s);
+                if (string.Equals(n, needle, StringComparison.OrdinalIgnoreCase)) return s;
+                if (starts == null && n.StartsWith(needle, StringComparison.OrdinalIgnoreCase)) starts = s;
+                if (contains == null && n.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0) contains = s;
+            }
+            return exactOnly ? null : (starts ?? contains);
+        }
+
+        // Bounded search for the first folder (within maxDepth of dir) whose name contains needle. Used
+        // only as a fallback when an intermediate level (usually the client) wasn't identified, so we can
+        // still locate the order by its number. Stops on the first match, at maxDepth, or when the time
+        // budget is spent — never a broad, deep scan.
+        private static string FindDescendant(string dir, string needle, int maxDepth,
+            System.Diagnostics.Stopwatch sw, int budgetMs)
+        {
+            if (string.IsNullOrWhiteSpace(dir) || string.IsNullOrWhiteSpace(needle) || maxDepth <= 0
+                || sw.ElapsedMilliseconds > budgetMs) return null;
+            string[] subs; try { subs = Directory.GetDirectories(dir); } catch { return null; }
+            foreach (var s in subs)
+                if (Path.GetFileName(s).IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0) return s;
+            foreach (var s in subs)
+            {
+                var hit = FindDescendant(s, needle, maxDepth - 1, sw, budgetMs);
+                if (hit != null) return hit;
+                if (sw.ElapsedMilliseconds > budgetMs) return null;
+            }
+            return null;
+        }
+
+        private static string RelOf(string baseDir, string abs)
+        {
+            try
+            {
+                string b = baseDir.TrimEnd('\\', '/');
+                if (abs != null && abs.Length > b.Length && abs.StartsWith(b, StringComparison.OrdinalIgnoreCase))
+                    return abs.Substring(b.Length).TrimStart('\\', '/');
+            }
+            catch { }
+            return "";
+        }
+
+        // Add every descendant of `dir` (within maxDepth) to outList as a path relative to baseDir.
+        private static void CollectSubtreeRel(string baseDir, string dir, int maxDepth,
+            System.Collections.Generic.List<string> outList, System.Diagnostics.Stopwatch sw, int budgetMs)
+        {
+            CollectSubtree(baseDir, dir, 0, maxDepth, outList, sw, budgetMs);
+        }
+        private static void CollectSubtree(string baseDir, string dir, int depth, int maxDepth,
+            System.Collections.Generic.List<string> outList, System.Diagnostics.Stopwatch sw, int budgetMs)
+        {
+            if (depth >= maxDepth || outList.Count > 400 || sw.ElapsedMilliseconds > budgetMs) return;
+            string[] subs; try { subs = Directory.GetDirectories(dir); } catch { return; }
+            foreach (var s in subs)
+            {
+                AddRel(baseDir, s, outList);
+                CollectSubtree(baseDir, s, depth + 1, maxDepth, outList, sw, budgetMs);
+                if (outList.Count > 400 || sw.ElapsedMilliseconds > budgetMs) return;
+            }
+        }
+
+        private static void AddRel(string baseDir, string abs, System.Collections.Generic.List<string> outList)
+        {
+            try
+            {
+                string b = baseDir.TrimEnd('\\', '/');
+                if (abs.Length > b.Length && abs.StartsWith(b, StringComparison.OrdinalIgnoreCase))
+                {
+                    string rel = abs.Substring(b.Length).TrimStart('\\', '/');
+                    if (rel.Length > 0 && !outList.Contains(rel)) outList.Add(rel);
+                }
             }
             catch { }
         }
@@ -328,12 +446,17 @@ namespace Axon.OutlookAddin
                     "topic and year).\n\nEmail\n  Subject: " + subject + "\n  From: " + sender +
                     "\n  Body (truncated):\n" + b + "\n\nClient/company (best guess): " + company + "\n\n" +
                     "The user's existing archive folders (relative paths):\n" + js.Serialize(list.ToArray()) + "\n\n" +
-                    "Decide where THIS email should be saved, based on the client/company and what the email is ABOUT " +
-                    "(e.g. the platform, campaign or project named in the subject). List the best-fitting folders first " +
-                    "(up to 5), copied EXACTLY from the list, and ONLY genuinely good fits (do not pad). " +
-                    "Prefer the DEEPEST, most specific folder for this client (its own subfolder, and the right year " +
-                    "subfolder) over a generic parent folder. If nothing fits well, propose a short NEW folder path that " +
-                    "follows the SAME structure as the existing folders.\n" +
+                    "Decide where THIS email should be saved.\n" +
+                    "STRONGEST SIGNAL: if the subject contains an order or SAP number, the correct folder is almost " +
+                    "always the one whose NAME contains that SAME number, even when the folder name has extra text " +
+                    "after it (a folder is often named like '<number>_<description>'). Match the number, not the words " +
+                    "around it, and include that folder's own subfolders as candidates.\n" +
+                    "Otherwise use the client/company and what the email is ABOUT (the project or product named in the " +
+                    "subject). List the best-fitting folders first (up to 5), copied EXACTLY from the list, and ONLY " +
+                    "genuinely good fits (do not pad). " +
+                    "Prefer the DEEPEST, most specific folder (the order's own leaf subfolder) over a generic parent " +
+                    "folder. If nothing fits well, propose a short NEW folder path that follows the SAME structure as " +
+                    "the existing folders.\n" +
                     "For each pick give a 1-2 word reason (e.g. 'client', 'same topic', 'client + year').\n" +
                     "Reply with ONLY JSON: {\"matches\":[{\"path\":\"exact folder path\",\"why\":\"1-2 words\"}], " +
                     "\"new_folder\":\"a relative path or empty\"}";
@@ -370,7 +493,7 @@ namespace Axon.OutlookAddin
         private static void CollectDirs(string root, string dir, int depth, int maxDepth,
             System.Collections.Generic.List<string> outList)
         {
-            if (depth >= maxDepth || outList.Count > 600) return;
+            if (depth >= maxDepth || outList.Count > 2000) return;
             try
             {
                 foreach (var d in Directory.GetDirectories(dir))

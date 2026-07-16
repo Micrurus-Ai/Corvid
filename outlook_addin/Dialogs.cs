@@ -88,7 +88,9 @@ namespace Axon.OutlookAddin
             cancel.Click += (o, e) => { DialogResult = DialogResult.Cancel; Close(); };
             Controls.Add(cancel);
             Controls.Add(save);
-            AcceptButton = save;
+            // No AcceptButton: on a settings screen Enter should never save+close while you're still
+            // typing (especially in the multiline list fields). Save is an explicit button click.
+            // Escape still cancels, which is the expected, safe shortcut.
             CancelButton = cancel;
         }
 
@@ -105,7 +107,9 @@ namespace Axon.OutlookAddin
         private static TextBox SettingsField(int x, int y, int w)
         { return new TextBox { Left = x, Top = y, Width = w, Height = 28, BorderStyle = BorderStyle.FixedSingle, BackColor = System.Drawing.Color.White, ForeColor = SettingsText }; }
         private static TextBox SettingsArea(int x, int y, int w, int h)
-        { return new TextBox { Left = x, Top = y, Width = w, Height = h, Multiline = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.FixedSingle, BackColor = System.Drawing.Color.White, ForeColor = SettingsText }; }
+        // AcceptsReturn: these are one-entry-per-line lists, so Enter must add a new line here, not
+        // trigger the form's default button and close the dialog.
+        { return new TextBox { Left = x, Top = y, Width = w, Height = h, Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.FixedSingle, BackColor = System.Drawing.Color.White, ForeColor = SettingsText }; }
         private static Button SettingsPrimaryButton(string text, int x, int y, int w, int h)
         {
             var b = new Button { Text = text, Left = x, Top = y, Width = w, Height = h, FlatStyle = FlatStyle.Flat, BackColor = System.Drawing.Color.FromArgb(17, 17, 17), ForeColor = System.Drawing.Color.White, Font = new System.Drawing.Font("Segoe UI", 9.5F, System.Drawing.FontStyle.Bold), Cursor = Cursors.Hand };
@@ -210,15 +214,22 @@ namespace Axon.OutlookAddin
                     if (i > 0) { string k = line.Substring(0, i).Trim(); string v = line.Substring(i + 1).Trim(); if (k.Length > 0 && v.Length > 0) codes[k] = v; }
                 }
                 var bases = new System.Collections.Generic.List<object>();
-                foreach (var line in (_bases.Text ?? "").Replace("\r", "").Split('\n'))
+                foreach (var raw in (_bases.Text ?? "").Replace("\r", "").Split('\n'))
                 {
+                    string line = raw.Trim();
+                    if (line.Length == 0) continue;
+                    string nm, pth;
                     int i = line.IndexOf('=');
-                    if (i > 0)
+                    if (i > 0) { nm = line.Substring(0, i).Trim(); pth = line.Substring(i + 1).Trim(); }
+                    else
                     {
-                        string nm = line.Substring(0, i).Trim(), pth = line.Substring(i + 1).Trim();
-                        if (nm.Length > 0 && pth.Length > 0)
-                            bases.Add(new System.Collections.Generic.Dictionary<string, object> { { "name", nm }, { "path", pth } });
+                        // Forgiving: a bare path with no "Label =" still works — label it by its last folder.
+                        pth = line;
+                        var segs = pth.TrimEnd('\\', '/').Split('\\', '/');
+                        nm = segs.Length > 0 && segs[segs.Length - 1].Length > 0 ? segs[segs.Length - 1] : "Archive";
                     }
+                    if (nm.Length > 0 && pth.Length > 0)
+                        bases.Add(new System.Collections.Generic.Dictionary<string, object> { { "name", nm }, { "path", pth } });
                 }
                 var d = new System.Collections.Generic.Dictionary<string, object> {
                     { "bases", bases },
