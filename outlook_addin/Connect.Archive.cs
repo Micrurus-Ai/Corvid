@@ -103,12 +103,13 @@ namespace Axon.OutlookAddin
                                category = Field(info, "category"), year = Field(info, "year"), sap = Field(info, "sap");
                         if (string.IsNullOrWhiteSpace(year)) year = DateTime.Now.Year.ToString();
                         string sender = ""; try { sender = (string)mail.SenderName; } catch { }
+                        string senderEmail = ""; try { senderEmail = (string)mail.SenderEmailAddress; } catch { }
                         string body = ""; try { body = (string)mail.Body; } catch { }
                         string baseDir = ResolveBaseDir(cfg, category, code);
                         _archiveBaseDir = baseDir;
                         _archiveCompany = company;
                         System.Collections.Generic.List<string> matches, existing, reasons; string newRel;
-                        BuildArchiveSuggestions(baseDir, subject, sender, body, year, company, sap, code,
+                        BuildArchiveSuggestions(baseDir, subject, sender, senderEmail, body, year, company, sap, code,
                                                 out matches, out reasons, out newRel, out existing);
                         picker.SetFolders(existing.ToArray());
                         picker.SetSuggestions(matches.ToArray(), reasons.ToArray(), newRel);
@@ -263,7 +264,7 @@ namespace Axon.OutlookAddin
         // different folder, so a wrong guess is never a dead end.
         private const string OrdersTypeFolder = "SOP";
 
-        private void BuildArchiveSuggestions(string baseDir, string subject, string sender, string body,
+        private void BuildArchiveSuggestions(string baseDir, string subject, string sender, string senderEmail, string body,
             string year, string company, string sap, string code,
             out System.Collections.Generic.List<string> matches, out System.Collections.Generic.List<string> reasons,
             out string newRel, out System.Collections.Generic.List<string> existing)
@@ -317,7 +318,7 @@ namespace Axon.OutlookAddin
                     // MC = customer / MI = internal group company / MS = supplier. Pre-selected as the top
                     // suggestion; the user can still choose a different one.
                     string catRel, catReason;
-                    PickOrderCategory(subject, sender, body, company, orderRel, existing, out catRel, out catReason);
+                    PickOrderCategory(subject, sender, senderEmail, body, company, orderRel, existing, out catRel, out catReason);
                     if (!string.IsNullOrEmpty(catRel)) add(catRel, catReason);
 
                     // Then the order folder itself, then its other category subfolders.
@@ -348,16 +349,19 @@ namespace Axon.OutlookAddin
             catch { }
         }
 
-        // Axon Group's own group companies — used to tell MI (internal) from MS (supplier). Extend this
-        // list as needed; a sender matching one of these is INTERNAL.
-        private const string InternalCompanies = "Axon Group, Noviso, Almeco, PCA";
+        // Axon Group's own email domains — the reliable way to tell MI (internal) from MS (supplier):
+        // a correspondent whose email domain is one of these is INTERNAL. Extend as new group companies
+        // are added.
+        private const string InternalDomains =
+            "almeco.be, axongroup.com, noviso.eu, coateq.be, proceq.eu, dimplesteel.com, " +
+            "akwaplus.be, enviro-tech.nl, pcacontrol.com, pcawater.com, pca-air.com";
 
         // Inside an order the email is filed by TYPE (Order = an order, Quotation = a quote) and by WHO it
         // is with (MC = the customer/client, MI = an internal group company, MS = a supplier). Ask the
         // model to classify, then match that to a real subfolder of this order. Returns the folder to
         // pre-select and a one-word reason, or nulls if it can't decide / the folder isn't there.
-        private void PickOrderCategory(string subject, string sender, string body, string clientName,
-            string orderRel, System.Collections.Generic.List<string> subfolders,
+        private void PickOrderCategory(string subject, string sender, string senderEmail, string body,
+            string clientName, string orderRel, System.Collections.Generic.List<string> subfolders,
             out string chosenRel, out string reason)
         {
             chosenRel = null; reason = null;
@@ -368,13 +372,14 @@ namespace Axon.OutlookAddin
                     "An email is being filed inside a customer ORDER folder. Decide two things.\n" +
                     "1) type — is this email about an ORDER (order confirmation/details) or a QUOTATION " +
                     "(a quote, offer or pricing)?\n" +
-                    "2) party — who is the email correspondence with:\n" +
-                    "   MC = the CUSTOMER (this order's client: " + clientName + ")\n" +
-                    "   MI = INTERNAL, one of our OWN group companies (" + InternalCompanies + ")\n" +
-                    "   MS = a SUPPLIER (any other external company)\n" +
-                    "The email may be forwarded — judge by the ORIGINAL correspondent, not the internal " +
-                    "person who forwarded it. Reply with ONLY JSON: {\"type\":\"Order|Quotation\",\"party\":\"MC|MI|MS\"}\n\n" +
-                    "From: " + sender + "\nSubject: " + subject + "\n\n" + b;
+                    "2) party — who is the email correspondence with, judged by the ORIGINAL correspondent's " +
+                    "email DOMAIN (for a forwarded email, the person in the quoted message, NOT the internal " +
+                    "colleague who forwarded it):\n" +
+                    "   MI = INTERNAL — the correspondent's domain is one of OUR OWN group domains: " + InternalDomains + "\n" +
+                    "   MC = the CUSTOMER — the correspondent is this order's client (" + clientName + ")\n" +
+                    "   MS = a SUPPLIER — any other external company (domain not ours and not the customer)\n" +
+                    "Reply with ONLY JSON: {\"type\":\"Order|Quotation\",\"party\":\"MC|MI|MS\"}\n\n" +
+                    "Visible sender: " + sender + " <" + (senderEmail ?? "") + ">\nSubject: " + subject + "\n\n" + b;
                 string text = ModelComplete(prompt, 0);
                 var m = System.Text.RegularExpressions.Regex.Match(text ?? "", "\\{[\\s\\S]*\\}");
                 if (!m.Success) return;
