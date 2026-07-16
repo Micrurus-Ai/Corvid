@@ -16,7 +16,7 @@ namespace Axon.OutlookAddin
     internal class SettingsForm : Form
     {
         private readonly Connect _owner;
-        private TextBox _bases, _sub, _codes, _tone;
+        private TextBox _tone;
         private ComboBox _mode;
         private Button _learn;
 
@@ -40,38 +40,25 @@ namespace Axon.OutlookAddin
 
         private void BuildPremiumUi()
         {
-            ClientSize = new System.Drawing.Size(620, 700);
+            ClientSize = new System.Drawing.Size(560, 470);
             BackColor = SettingsBg;
             int W = ClientSize.Width, x = 24, lw = W - 48;
 
             Controls.Add(SettingsTitle("Axon settings", x, 20, lw));
-            Controls.Add(SettingsHint("Email archive and writing tone for the Outlook add-in.", x, 54, lw, 22));
+            Controls.Add(SettingsHint("Settings for the Outlook add-in.", x, 54, lw, 22));
 
-            var archive = SettingsCard(x, 92, lw, 360);
+            // Email archive: the folders and country codes are built in, so the only choice left here is
+            // what gets saved when you download an email.
+            var archive = SettingsCard(x, 92, lw, 116);
             Controls.Add(archive);
-            archive.Controls.Add(SettingsSectionTitle("Email archive", 18, 16, lw - 36));
-            archive.Controls.Add(SettingsHint("Define your archive folders by label. Axon reads each email and files it under the matching label.", 18, 42, lw - 36, 42));
-
-            archive.Controls.Add(SettingsFieldLabel("Archive folders", 18, 94, 180));
-            archive.Controls.Add(SettingsHint("One per line:  Label = folder   (e.g. Clients = T:\\IF\\Sales\\AB\\SOP\\)", 150, 95, lw - 190, 20));
-            _bases = SettingsArea(18, 118, lw - 116, 86);
-            archive.Controls.Add(_bases);
-            archive.Controls.Add(SettingsAddFolderBtn(_bases, lw - 92, 118));
-
-            archive.Controls.Add(SettingsFieldLabel("Country to code", 18, 216, 160));
-            archive.Controls.Add(SettingsHint("One per line, e.g. Belgium=AB", 146, 217, lw - 180, 20));
-            _codes = SettingsArea(18, 240, lw - 36, 58);
-            archive.Controls.Add(_codes);
-
-            archive.Controls.Add(SettingsFieldLabel("Save", 18, 326, 46));
-            _mode = new ComboBox { Left = 64, Top = 322, Width = 220, Height = 30, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = System.Drawing.Color.White, ForeColor = SettingsText };
+            archive.Controls.Add(SettingsSectionTitle("Saving emails", 18, 16, lw - 36));
+            archive.Controls.Add(SettingsHint("When you download an email, save the message, its attachments, or both.", 18, 42, lw - 36, 28));
+            archive.Controls.Add(SettingsFieldLabel("Save", 18, 78, 46));
+            _mode = new ComboBox { Left = 66, Top = 74, Width = 260, Height = 30, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = System.Drawing.Color.White, ForeColor = SettingsText };
             _mode.Items.AddRange(new object[] { "Both (email + attachments)", "Email (.msg)", "Attachments only" });
             archive.Controls.Add(_mode);
-            archive.Controls.Add(SettingsFieldLabel("Default subfolder", 306, 326, 148));
-            _sub = SettingsField(456, 322, lw - 492);
-            archive.Controls.Add(_sub);
 
-            var writing = SettingsCard(x, 468, lw, 170);
+            var writing = SettingsCard(x, 224, lw, 170);
             Controls.Add(writing);
             writing.Controls.Add(SettingsSectionTitle("Writing tone", 18, 16, lw - 36));
             writing.Controls.Add(SettingsHint("How Axon writes replies and drafts. Type it, or learn it from your Sent mail.", 18, 42, lw - 36, 28));
@@ -171,29 +158,8 @@ namespace Axon.OutlookAddin
                     var d = js.DeserializeObject(File.ReadAllText(p)) as System.Collections.Generic.Dictionary<string, object>;
                     if (d != null)
                     {
-                        // Archive folders: new "bases" list of {name, path}; fall back to old client/supplier.
-                        var sbB = new System.Text.StringBuilder();
-                        var basesArr = d.ContainsKey("bases") ? d["bases"] as object[] : null;
-                        if (basesArr != null)
-                            foreach (var o in basesArr)
-                            {
-                                var bd = o as System.Collections.Generic.Dictionary<string, object>;
-                                if (bd == null) continue;
-                                string nm = Get(bd, "name"), pth = Get(bd, "path");
-                                if (nm.Length > 0) sbB.AppendLine(nm + " = " + pth);
-                            }
-                        else
-                        {
-                            string cb = Get(d, "client_base"), sb2 = Get(d, "supplier_base");
-                            if (cb.Length > 0) sbB.AppendLine("Clients = " + cb);
-                            if (sb2.Length > 0) sbB.AppendLine("Suppliers = " + sb2);
-                        }
-                        _bases.Text = sbB.ToString().TrimEnd();
-                        _sub.Text = Get(d, "default_subfolder");
                         string mode = Get(d, "save_mode").ToLowerInvariant();
                         _mode.SelectedIndex = mode == "email" ? 1 : (mode == "attachments" ? 2 : 0);
-                        var cc = d.ContainsKey("country_codes") ? d["country_codes"] as System.Collections.Generic.Dictionary<string, object> : null;
-                        if (cc != null) { var sb = new System.Text.StringBuilder(); foreach (var kv in cc) sb.AppendLine(kv.Key + "=" + (kv.Value ?? "")); _codes.Text = sb.ToString().TrimEnd(); }
                     }
                 }
             }
@@ -207,38 +173,14 @@ namespace Axon.OutlookAddin
             try
             {
                 Directory.CreateDirectory(Dir());
-                var codes = new System.Collections.Generic.Dictionary<string, object>();
-                foreach (var line in (_codes.Text ?? "").Replace("\r", "").Split('\n'))
-                {
-                    int i = line.IndexOf('=');
-                    if (i > 0) { string k = line.Substring(0, i).Trim(); string v = line.Substring(i + 1).Trim(); if (k.Length > 0 && v.Length > 0) codes[k] = v; }
-                }
-                var bases = new System.Collections.Generic.List<object>();
-                foreach (var raw in (_bases.Text ?? "").Replace("\r", "").Split('\n'))
-                {
-                    string line = raw.Trim();
-                    if (line.Length == 0) continue;
-                    string nm, pth;
-                    int i = line.IndexOf('=');
-                    if (i > 0) { nm = line.Substring(0, i).Trim(); pth = line.Substring(i + 1).Trim(); }
-                    else
-                    {
-                        // Forgiving: a bare path with no "Label =" still works — label it by its last folder.
-                        pth = line;
-                        var segs = pth.TrimEnd('\\', '/').Split('\\', '/');
-                        nm = segs.Length > 0 && segs[segs.Length - 1].Length > 0 ? segs[segs.Length - 1] : "Archive";
-                    }
-                    if (nm.Length > 0 && pth.Length > 0)
-                        bases.Add(new System.Collections.Generic.Dictionary<string, object> { { "name", nm }, { "path", pth } });
-                }
-                var d = new System.Collections.Generic.Dictionary<string, object> {
-                    { "bases", bases },
-                    { "country_codes", codes },
-                    { "save_mode", new[] { "both", "email", "attachments" }[_mode.SelectedIndex < 0 ? 0 : _mode.SelectedIndex] },
-                    { "default_subfolder", (_sub.Text ?? "").Trim() },
-                };
+                string p = Path.Combine(Dir(), "archive.json");
                 var js = new System.Web.Script.Serialization.JavaScriptSerializer();
-                File.WriteAllText(Path.Combine(Dir(), "archive.json"), js.Serialize(d));
+                // Archive folders + country codes are built in now and no longer edited here, so keep any
+                // existing archive.json values (in case someone set an override) and only update save_mode.
+                var d = new System.Collections.Generic.Dictionary<string, object>();
+                try { if (File.Exists(p)) d = js.DeserializeObject(File.ReadAllText(p)) as System.Collections.Generic.Dictionary<string, object> ?? d; } catch { }
+                d["save_mode"] = new[] { "both", "email", "attachments" }[_mode.SelectedIndex < 0 ? 0 : _mode.SelectedIndex];
+                File.WriteAllText(p, js.Serialize(d));
                 File.WriteAllText(Path.Combine(Dir(), "tone.txt"), (_tone.Text ?? "").Trim());
             }
             catch (Exception ex) { Ui.Notify("Couldn't save settings: " + ex.Message, "Axon intelligence"); }
