@@ -213,18 +213,21 @@ namespace Axon.OutlookAddin
             string sender = ""; try { sender = (string)mail.SenderName; } catch { }
             string senderEmail = ""; try { senderEmail = (string)mail.SenderEmailAddress; } catch { }
             string body = ""; try { body = (string)mail.Body; } catch { }
-            if (body.Length > 6000) body = body.Substring(0, 6000);
+            // Read the whole thread — order emails are usually several messages of back-and-forth, and the
+            // customer/order details often sit in an earlier message, not the newest one.
+            if (body.Length > 24000) body = body.Substring(0, 24000);
             var js = new System.Web.Script.Serialization.JavaScriptSerializer();
             string mapJson = js.Serialize(cfg.Codes);
             string labels = js.Serialize(cfg.Labels);
             string prompt =
-                "Read this email and reply with ONLY JSON: {\"category\":\"\",\"code\":\"\",\"company\":\"\"," +
+                "Read this email THREAD and reply with ONLY JSON: {\"category\":\"\",\"code\":\"\",\"company\":\"\"," +
                 "\"year\":\"\",\"sap\":\"\"}.\n" +
-                "IMPORTANT: this email may be FORWARDED (subject starts with FW/FWD/TR/Doorst, or the body " +
-                "quotes an earlier message). If so, the party this email is ABOUT is the ORIGINAL EXTERNAL " +
-                "client/company discussed in it, NOT the colleague who forwarded it. Identify that external " +
-                "client and use IT for company and country, reading the forwarded content, signatures and any " +
-                "quoted 'From:' line, not just the visible sender.\n" +
+                "This may be a thread with several back-and-forth messages (newest at the top); use ALL of it. " +
+                "It may also be FORWARDED (subject starts with FW/FWD/TR/Doorst, or the body quotes earlier " +
+                "messages). Either way, the party this email is ABOUT is the ORIGINAL EXTERNAL client/company " +
+                "in the conversation, NOT the colleague who forwarded it. Identify that external client and use " +
+                "IT for company and country, reading the whole thread — quoted messages, signatures and any " +
+                "'From:' lines — not just the visible sender.\n" +
                 "\"category\" = which ONE of the user's archive folders this email belongs in (choose exactly one " +
                 "label from this list, or empty if none clearly fits): " + labels + ".\n" +
                 "\"company\" = the external client's company name.\n" +
@@ -370,14 +373,16 @@ namespace Axon.OutlookAddin
             chosenRel = null; reason = null;
             try
             {
-                string b = body ?? ""; if (b.Length > 3000) b = b.Substring(0, 3000);
+                string b = body ?? ""; if (b.Length > 24000) b = b.Substring(0, 24000);
                 string prompt =
-                    "An email is being filed inside a customer ORDER folder. Decide two things.\n" +
-                    "1) type — is this email about an ORDER (order confirmation/details) or a QUOTATION " +
-                    "(a quote, offer or pricing)?\n" +
-                    "2) party — who is the email correspondence with, judged by the ORIGINAL correspondent's " +
-                    "email DOMAIN (for a forwarded email, the person in the quoted message, NOT the internal " +
-                    "colleague who forwarded it):\n" +
+                    "An email is being filed inside a customer ORDER folder. This may be a THREAD with several " +
+                    "back-and-forth messages (newest at the top) — read all of it, then decide two things about " +
+                    "the LATEST message (the one being filed), using the thread for context.\n" +
+                    "1) type — is it about an ORDER (order confirmation/details) or a QUOTATION (a quote, offer " +
+                    "or pricing)?\n" +
+                    "2) party — who is the correspondence with, judged by the ORIGINAL correspondent's email " +
+                    "DOMAIN (for a forwarded/threaded email, the external person in the conversation, NOT the " +
+                    "internal colleague who forwarded it):\n" +
                     "   MI = INTERNAL — the correspondent's domain is one of OUR OWN group domains: " + InternalDomains + "\n" +
                     "   MC = the CUSTOMER — the correspondent is this order's client (" + clientName + ")\n" +
                     "   MS = a SUPPLIER — any other external company (domain not ours and not the customer)\n" +
