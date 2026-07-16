@@ -311,11 +311,16 @@ namespace Axon.OutlookAddin
                     // Also list the client's OTHER orders, so picking a different order is easy.
                     if (clientDir != null) CollectSubtreeRel(baseDir, clientDir, 1, existing, sw, budgetMs);
 
-                    // Suggestions: where this client was filed before (if under this order), then the order
-                    // folder itself, then its immediate category subfolders.
-                    string remembered = RememberedFolder(company);
-                    if (!string.IsNullOrEmpty(remembered) && existing.Contains(remembered)) add(remembered, "filed here before");
                     string orderRel = RelOf(baseDir, orderDir);
+
+                    // Auto-pick the category from Axon Group's filing rules — Order vs Quotation, and
+                    // MC = customer / MI = internal group company / MS = supplier. Pre-selected as the top
+                    // suggestion; the user can still choose a different one.
+                    string catRel, catReason;
+                    PickOrderCategory(subject, sender, body, company, orderRel, existing, out catRel, out catReason);
+                    if (!string.IsNullOrEmpty(catRel)) add(catRel, catReason);
+
+                    // Then the order folder itself, then its other category subfolders.
                     add(orderRel, "this order");
                     foreach (var rel in existing)
                         if (rel.StartsWith(orderRel + "\\", StringComparison.OrdinalIgnoreCase)
@@ -339,6 +344,64 @@ namespace Axon.OutlookAddin
                     foreach (var t in tail) if (!string.IsNullOrWhiteSpace(t)) relParts.Add(t.Trim());
                     newRel = string.Join("\\", relParts);
                 }
+            }
+            catch { }
+        }
+
+        // Axon Group's own group companies — used to tell MI (internal) from MS (supplier). Extend this
+        // list as needed; a sender matching one of these is INTERNAL.
+        private const string InternalCompanies = "Axon Group, Noviso, Almeco, PCA";
+
+        // Inside an order the email is filed by TYPE (Order = an order, Quotation = a quote) and by WHO it
+        // is with (MC = the customer/client, MI = an internal group company, MS = a supplier). Ask the
+        // model to classify, then match that to a real subfolder of this order. Returns the folder to
+        // pre-select and a one-word reason, or nulls if it can't decide / the folder isn't there.
+        private void PickOrderCategory(string subject, string sender, string body, string clientName,
+            string orderRel, System.Collections.Generic.List<string> subfolders,
+            out string chosenRel, out string reason)
+        {
+            chosenRel = null; reason = null;
+            try
+            {
+                string b = body ?? ""; if (b.Length > 3000) b = b.Substring(0, 3000);
+                string prompt =
+                    "An email is being filed inside a customer ORDER folder. Decide two things.\n" +
+                    "1) type — is this email about an ORDER (order confirmation/details) or a QUOTATION " +
+                    "(a quote, offer or pricing)?\n" +
+                    "2) party — who is the email correspondence with:\n" +
+                    "   MC = the CUSTOMER (this order's client: " + clientName + ")\n" +
+                    "   MI = INTERNAL, one of our OWN group companies (" + InternalCompanies + ")\n" +
+                    "   MS = a SUPPLIER (any other external company)\n" +
+                    "The email may be forwarded — judge by the ORIGINAL correspondent, not the internal " +
+                    "person who forwarded it. Reply with ONLY JSON: {\"type\":\"Order|Quotation\",\"party\":\"MC|MI|MS\"}\n\n" +
+                    "From: " + sender + "\nSubject: " + subject + "\n\n" + b;
+                string text = ModelComplete(prompt, 0);
+                var m = System.Text.RegularExpressions.Regex.Match(text ?? "", "\\{[\\s\\S]*\\}");
+                if (!m.Success) return;
+                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                var d = js.DeserializeObject(m.Value) as System.Collections.Generic.Dictionary<string, object>;
+                if (d == null) return;
+                string type = d.ContainsKey("type") && d["type"] != null ? d["type"].ToString().Trim() : "";
+                string party = d.ContainsKey("party") && d["party"] != null ? d["party"].ToString().Trim() : "";
+                if (party.Length == 0) return;
+
+                // Find the real subfolder for this party. Prefer one under the right type grouping
+                // (e.g. Order\MC), else any folder whose leaf is the party (e.g. MC directly under the order).
+                string best = null;
+                foreach (var rel in subfolders)
+                {
+                    if (!rel.StartsWith(orderRel + "\\", StringComparison.OrdinalIgnoreCase)) continue;
+                    var segs = rel.Split('\\');
+                    if (!string.Equals(segs[segs.Length - 1], party, StringComparison.OrdinalIgnoreCase)) continue;
+                    bool underType = type.Length > 0 && rel.IndexOf("\\" + type + "\\", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (underType) { best = rel; break; }
+                    if (best == null) best = rel;
+                }
+                if (best == null) return;
+                chosenRel = best;
+                reason = party.Equals("MC", StringComparison.OrdinalIgnoreCase) ? "customer"
+                       : party.Equals("MI", StringComparison.OrdinalIgnoreCase) ? "internal"
+                       : party.Equals("MS", StringComparison.OrdinalIgnoreCase) ? "supplier" : party;
             }
             catch { }
         }

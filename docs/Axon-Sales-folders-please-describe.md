@@ -26,20 +26,18 @@ describing. PRICE ENQUIRY is treated as part of SOP.)*
 
 ---
 
-## 2. Inside an order — what goes in each folder?
+## 2. Inside an order — what goes in each folder? (confirmed)
 
-These are the folders **inside an order** (e.g. inside `14457_ADD low noise`). Knowing what each is
-for lets Axon pre-pick the right one; you can always change it before saving.
+An email inside an order is filed by **type** (Order vs Quotation) and by **who it is with**
+(MC / MI / MS):
 
 | Folder | What it is for |
 |--------|----------------|
-| Order |  |
-| Quotation |  |
-| MC |  |
-| MI |  |
-| MS |  |
+| Order | Emails that are orders |
+| Quotation | Quotes/offers (not orders); also contains MC / MI / MS |
+| MC | Correspondence with the **customer** (the client) |
+| MI | Correspondence **internal** — our own group (Axon Group, Noviso, Almeco, PCA …) |
+| MS | Correspondence with **suppliers** |
 
----
-
-Thank you! With these meanings, Axon files each order email into the right folder under SOP
-automatically.
+Axon now uses these rules to pre-pick the right folder (e.g. an order from the customer →
+`Order\MC`, a supplier's quote → `Quotation\MS`); you can always change it before saving.
