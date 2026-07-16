@@ -726,8 +726,13 @@ namespace Axon.OutlookAddin
                 for (int i = 0; i < matches.Length; i++)
                 {
                     string n = matches[i];
-                    // Show the full relative path (not just the leaf) so it's clear exactly where it saves.
-                    var b = Ui.RowBtn("→   " + n, 2, y, w - 4, 28);
+                    // A long path truncates at the RIGHT, hiding the part that matters (the category leaf,
+                    // e.g. \MC \MS). Show the last two segments with a leading … so the leaf is always
+                    // visible; the full path is still what gets saved and is shown in the list below.
+                    string disp = n;
+                    var segs = n.Split('\\');
+                    if (segs.Length > 2) disp = "…\\" + segs[segs.Length - 2] + "\\" + segs[segs.Length - 1];
+                    var b = Ui.RowBtn("→   " + disp, 2, y, w - 4, 28);
                     b.Click += (o, e) => { Chosen = n; DialogResult = DialogResult.OK; Close(); };
                     _suggPanel.Controls.Add(b); y += 31;
                 }
