@@ -1,85 +1,121 @@
 # Axon — Sales folder structure (please add descriptions)
 
-To make Axon's **Save / Download email** feature file emails into the correct folder
-automatically, we need to understand what each folder in `T:\IF\Sales` is used for.
+To make Axon's **Save / Download email** feature file emails into the correct folder automatically,
+we need to understand what each folder in `T:\IF\Sales` is used for.
 
-Below is the structure. **Please fill in the "What it is for" column** for the folders in
-sections 1–3. The year, client and order folders are self-explanatory, so those don't need
-describing — only the ones marked below.
+Below is the **actual folder tree**. The **year / client / order** levels are self-explanatory
+(one folder per year, per client, per order), so those don't need describing. Please fill in the
+**"What it is for"** column in sections 1–3 for the folders that carry a meaning.
 
 ---
 
-## The structure (the repeating pattern)
+## The actual tree
 
 ```
 T:\IF\Sales\
-  <country code>\          e.g. AB, AD, AF, AN
-    <type>\                e.g. SOP, COMPLAINT, SERVICE ...      <-- section 2
-      <year>\              e.g. 2026 (14334-)                    (self-explanatory)
-        <client>\          e.g. Voestalpine, Agristo            (self-explanatory)
-          <order>\         e.g. 14457_ADD low noise             (number_description)
-            <category>\    e.g. Documents, Order, Quotation      <-- section 3
-              <sub>\       e.g. MC, MI, MS                       <-- section 3
+├─ AB\   (Belgium – confirmed)
+│   ├─ CLIENTS GENERAL\
+│   ├─ COMPLAINT\
+│   ├─ NON-SOP\
+│   ├─ PROSPECTION\
+│   ├─ SERVICE\
+│   ├─ SOP\            <-- orders (see "Inside SOP" below)
+│   └─ SUSPECTS\
+├─ AD\   (country = ?)
+│   ├─ CLIENTS GENERAL\
+│   ├─ COMPLAINT\
+│   ├─ NON-SOP\
+│   ├─ PRICE ENQUIRY\
+│   ├─ PROSPECTION\
+│   ├─ SOP\
+│   └─ SUSPECTS\
+├─ AF\   (country = ?)
+│   ├─ CLIENTS GENERAL\
+│   ├─ COMPLAINT\
+│   ├─ NON-SOP\
+│   ├─ PRICE ENQUIRY\
+│   ├─ PROSPECTION\
+│   ├─ SOP\
+│   └─ SUSPECTS\
+└─ AN\   (Netherlands – confirmed)
+    ├─ CLIENTS GENERAL\
+    ├─ COMPLAINT\
+    ├─ FPZ\
+    ├─ NON-SOP\
+    ├─ PRICE ENQUIRY\
+    ├─ PROSPECTION\
+    ├─ SOP\
+    ├─ SUSPECTS\
+    └─ verslagen bezoek & tel\
+
+Inside every SOP\ (orders):
+
+  SOP\
+  └─ <year>\                one per year        e.g. "2026 (14334-)", "2025 (14094-)"
+     └─ <client>\           one per client      e.g. Voestalpine, Agristo, Actemium
+        └─ <order>\         one per order       e.g. 14457_ADD low noise  (number_description)
+           ├─ Documents\
+           ├─ Order\        (may contain: MC, MI, MS, PO, SO, Internal, or a supplier name)
+           ├─ Quotation\    (may contain: MC, MS, ...)
+           ├─ MC\
+           ├─ MI\
+           └─ MS\
 ```
 
 ---
 
 ## 1. Country codes — which country is each?
 
-| Code | Country              |
-|------|----------------------|
-| AB   | Belgium (confirmed)  |
-| AD   |                      |
-| AF   |                      |
+| Code | Country |
+|------|---------|
+| AB   | Belgium (confirmed) |
+| AD   |  |
+| AF   |  |
 | AN   | Netherlands (confirmed) |
 
 ---
 
-## 2. Type folders — what is each used for?
+## 2. Type folders — what is each used for? (Which one holds order / sales emails?)
 
-These sit directly under each country code. **Which one holds order / sales emails?**
-(Some appear only in certain countries, noted in brackets.)
-
-| Folder                     | What it is for |
-|----------------------------|----------------|
-| SOP                        |                |
-| COMPLAINT                  |                |
-| SERVICE                    |                |
-| NON-SOP                    |                |
-| PROSPECTION                |                |
-| SUSPECTS                   |                |
-| CLIENTS GENERAL            |                |
-| PRICE ENQUIRY  (AD, AF, AN) |               |
-| FPZ  (AN only)             |                |
-| verslagen bezoek & tel  (AN only) |         |
+| Folder | What it is for |
+|--------|----------------|
+| SOP |  |
+| COMPLAINT |  |
+| SERVICE  (AB only) |  |
+| NON-SOP |  |
+| PROSPECTION |  |
+| SUSPECTS |  |
+| CLIENTS GENERAL |  |
+| PRICE ENQUIRY  (AD, AF, AN) |  |
+| FPZ  (AN only) |  |
+| verslagen bezoek & tel  (AN only) |  |
 
 ---
 
 ## 3. Inside an order — what goes in each?
 
-These sit inside an order folder (e.g. inside `14457_ADD low noise`).
-
-| Folder     | What it is for |
-|------------|----------------|
-| Documents  |                |
-| Order      |                |
-| Quotation  |                |
-| MC         |                |
-| MI         |                |
-| MS         |                |
+| Folder | What it is for |
+|--------|----------------|
+| Documents |  |
+| Order |  |
+| Quotation |  |
+| MC |  |
+| MI |  |
+| MS |  |
+| PO   (seen inside Order) |  |
+| SO   (seen inside Order) |  |
+| Internal |  |
 
 ---
 
 ## Anything we missed?
 
-If there are other important folders, or the meaning changes by country, please add them here:
-
 | Folder / path | What it is for |
 |---------------|----------------|
-|               |                |
-|               |                |
+|  |  |
+|  |  |
 
 ---
 
-With these descriptions, Axon will know, for each incoming email, **which type folder and which
-category** it belongs in — so Save/Download files it in the right place automatically.
+When you return this, Axon will use **your** definitions to pre-pick the right type folder and
+category for each email — while you can always change it before saving.
