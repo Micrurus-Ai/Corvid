@@ -214,8 +214,10 @@ namespace Axon.OutlookAddin
             string senderEmail = ""; try { senderEmail = (string)mail.SenderEmailAddress; } catch { }
             string body = ""; try { body = (string)mail.Body; } catch { }
             // Read the whole thread — order emails are usually several messages of back-and-forth, and the
-            // customer/order details often sit in an earlier message, not the newest one.
-            if (body.Length > 24000) body = body.Substring(0, 24000);
+            // customer/order details often sit in an earlier message, not the newest one. TrimBody keeps the
+            // NEWEST and OLDEST parts (drops only the middle) so a very long thread never breaks the call
+            // and never loses the original correspondent at the bottom.
+            body = TrimBody(body, 24000);
             var js = new System.Web.Script.Serialization.JavaScriptSerializer();
             string mapJson = js.Serialize(cfg.Codes);
             string labels = js.Serialize(cfg.Labels);
@@ -373,7 +375,7 @@ namespace Axon.OutlookAddin
             chosenRel = null; reason = null;
             try
             {
-                string b = body ?? ""; if (b.Length > 24000) b = b.Substring(0, 24000);
+                string b = TrimBody(body ?? "", 24000);   // keep newest + oldest of a long thread; never breaks
                 string prompt =
                     "An email is being filed inside a customer ORDER folder. This may be a THREAD with several " +
                     "back-and-forth messages (newest at the top) — read all of it, then decide two things about " +
