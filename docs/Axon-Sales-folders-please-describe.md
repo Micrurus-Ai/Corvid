@@ -33,26 +33,13 @@ for lets Axon pre-pick the right one; you can always change it before saving.
 
 | Folder | What it is for |
 |--------|----------------|
-| Documents |  |
 | Order |  |
 | Quotation |  |
 | MC |  |
 | MI |  |
 | MS |  |
-| PO   (inside Order) |  |
-| SO   (inside Order) |  |
-| Internal |  |
 
 ---
 
-## Anything we missed?
-
-| Folder | What it is for |
-|--------|----------------|
-|  |  |
-|  |  |
-
----
-
-Thank you! With the country codes and the folder meanings, Axon files each order email into the
-right place under SOP automatically.
+Thank you! With these meanings, Axon files each order email into the right folder under SOP
+automatically.
