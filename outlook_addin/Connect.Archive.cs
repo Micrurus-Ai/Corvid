@@ -201,6 +201,9 @@ namespace Axon.OutlookAddin
             foreach (var def in new[] { new[] { "Belgium", "AB" }, new[] { "Germany", "AD" },
                                         new[] { "France", "AF" }, new[] { "Netherlands", "AN" } })
                 if (!cfg.Codes.ContainsKey(def[0])) cfg.Codes[def[0]] = def[1];
+            // Default archive root, so Download works with NO setup at all. A user who maps the share to a
+            // different drive/path can still override it in Settings > Archive folders.
+            if (!cfg.Ready) cfg.Bases.Add(new System.Collections.Generic.KeyValuePair<string, string>("Sales", @"T:\IF\Sales"));
             return cfg;
         }
 
