@@ -195,6 +195,11 @@ namespace Axon.OutlookAddin
                 if (cc != null) foreach (var kv in cc) if (kv.Value != null) cfg.Codes[kv.Key] = kv.Value.ToString();
             }
             catch { }
+            // Axon Group's standard country codes, seeded so Download works out of the box for all four
+            // countries without anyone configuring them. A user's own Settings entry overrides these.
+            foreach (var def in new[] { new[] { "Belgium", "AB" }, new[] { "Germany", "AD" },
+                                        new[] { "France", "AF" }, new[] { "Netherlands", "AN" } })
+                if (!cfg.Codes.ContainsKey(def[0])) cfg.Codes[def[0]] = def[1];
             return cfg;
         }
 

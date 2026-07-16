@@ -15,14 +15,14 @@ describing. PRICE ENQUIRY is treated as part of SOP.)*
 
 ---
 
-## 1. Country codes — which country is each?
+## 1. Country codes (already confirmed — no action needed)
 
 | Code | Country |
 |------|---------|
-| AB   | Belgium (confirmed) |
-| AD   |  |
-| AF   |  |
-| AN   | Netherlands (confirmed) |
+| AB   | Belgium |
+| AD   | Germany |
+| AF   | France |
+| AN   | Netherlands |
 
 ---
 
