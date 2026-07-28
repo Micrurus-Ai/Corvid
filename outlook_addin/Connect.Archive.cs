@@ -294,46 +294,46 @@ namespace Axon.OutlookAddin
             {
                 if (!Directory.Exists(baseDir)) return;
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                const int budgetMs = 6000;
+                const int budgetMs = 10000;
 
                 // --- Deterministic descent: one listing per level, straight down the known template. ---
                 string dir = baseDir;
-                string codeDir = FindChild(dir, code, true);              if (codeDir != null) dir = codeDir;  // Sales\AB
-                string sopDir  = FindChild(dir, OrdersTypeFolder, true);  if (sopDir  != null) dir = sopDir;   // ...\SOP
-
+                string codeDir = FindChild(dir, code, true);
+                string sopDir  = codeDir != null ? FindChild(codeDir, OrdersTypeFolder, true) : null;
                 string yearDir = null, clientDir = null, orderDir = null;
-                if (sopDir != null)
-                {
-                    int cy; if (!int.TryParse((year ?? "").Trim(), out cy)) cy = DateTime.Now.Year;
+                int cy; if (!int.TryParse((year ?? "").Trim(), out cy)) cy = DateTime.Now.Year;
 
-                    // The year folders are SOP-NUMBER RANGES (e.g. "2025 (14094-)" = 14094..14333), so an
-                    // order stays in the folder of the year it STARTED even if this email is from a later
-                    // year. Look for the order number in the current year and the two before it.
-                    if (!string.IsNullOrEmpty(sap))
-                        foreach (int y in new[] { cy, cy - 1, cy - 2 })
-                        {
-                            string yf = FindChild(sopDir, y.ToString(), false);   // "2026 (14334-)" starts with 2026
-                            if (yf == null) continue;
-                            string cd = string.IsNullOrEmpty(company) ? null : FindChild(yf, company, false);
-                            string od = cd != null ? FindChild(cd, sap, false) : null;        // fast: year\client\order
-                            if (od == null) od = FindDescendant(yf, sap, 2, sw, budgetMs);     // else search year\*\order
-                            if (od != null)
-                            {
-                                orderDir = od; yearDir = yf; clientDir = cd;
-                                if (clientDir == null) try { clientDir = System.IO.Directory.GetParent(od).FullName; } catch { }
-                                break;
-                            }
-                        }
-
-                    // Order not filed yet: for the "create new" path, place it under the CURRENT year
-                    // (a new order starts this year) and the client folder if it already exists.
-                    if (orderDir == null)
+                // 1) Fast path: the order under the DETECTED country's SOP, in the current year or the two
+                // before it (year folders are SOP-number ranges, so an order that started earlier stays in
+                // the earlier year's folder even when this email is newer).
+                if (sopDir != null && !string.IsNullOrEmpty(sap))
+                    foreach (int y in new[] { cy, cy - 1, cy - 2 })
                     {
-                        yearDir = FindChild(sopDir, cy.ToString(), false);
-                        clientDir = (yearDir != null && !string.IsNullOrEmpty(company)) ? FindChild(yearDir, company, false) : null;
+                        string yf = FindChild(sopDir, y.ToString(), false);   // "2026 (14334-)" starts with 2026
+                        if (yf == null) continue;
+                        string cd = string.IsNullOrEmpty(company) ? null : FindChild(yf, company, false);
+                        string od = cd != null ? FindChild(cd, sap, false) : null;        // fast: year\client\order
+                        if (od == null) od = FindDescendant(yf, sap, 2, sw, budgetMs);     // else search year\*\order
+                        if (od != null) { orderDir = od; break; }
                     }
-                    dir = clientDir ?? yearDir ?? sopDir;
+
+                // 2) Broad fallback: the country AND client read from the email can BOTH be wrong (a "KLIMA"
+                // subject for an order actually filed under AB\Lutosa). The ORDER NUMBER is the reliable key,
+                // so search it across EVERY country code and recent years.
+                if (orderDir == null && !string.IsNullOrEmpty(sap))
+                    orderDir = FindOrderAnywhere(baseDir, sap, sw, budgetMs);
+
+                if (orderDir != null)
+                {
+                    try { clientDir = System.IO.Directory.GetParent(orderDir).FullName; } catch { }
                 }
+                else if (sopDir != null)
+                {
+                    // Genuinely not filed yet: propose a new folder under the detected country's current year.
+                    yearDir = FindChild(sopDir, cy.ToString(), false);
+                    clientDir = (yearDir != null && !string.IsNullOrEmpty(company)) ? FindChild(yearDir, company, false) : null;
+                }
+                dir = clientDir ?? yearDir ?? sopDir ?? codeDir ?? baseDir;
 
                 if (orderDir != null)
                 {
@@ -442,6 +442,34 @@ namespace Axon.OutlookAddin
                        : party.Equals("MS", StringComparison.OrdinalIgnoreCase) ? "supplier" : party;
             }
             catch { }
+        }
+
+        // Search the order number across EVERY country-code folder and its recent year folders. The email's
+        // detected country and client are unreliable, but the order number is unique — so this finds the
+        // order wherever it actually lives. Efficient: single-level listings, newest years first, and
+        // bounded by the shared time budget so a slow share can't hang.
+        private string FindOrderAnywhere(string baseDir, string sap, System.Diagnostics.Stopwatch sw, int budgetMs)
+        {
+            try
+            {
+                foreach (var codeDir in Directory.GetDirectories(baseDir))   // AB, AD, AF, AN, ...
+                {
+                    if (sw.ElapsedMilliseconds > budgetMs) return null;
+                    string sopDir = FindChild(codeDir, OrdersTypeFolder, true);
+                    if (sopDir == null) continue;
+                    string[] years; try { years = Directory.GetDirectories(sopDir); } catch { continue; }
+                    System.Array.Sort(years); System.Array.Reverse(years);   // newest year first (names start with the year)
+                    int n = 0;
+                    foreach (var yf in years)
+                    {
+                        if (n++ >= 4 || sw.ElapsedMilliseconds > budgetMs) break;
+                        string od = FindDescendant(yf, sap, 2, sw, budgetMs);   // year\client\order
+                        if (od != null) return od;
+                    }
+                }
+            }
+            catch { }
+            return null;
         }
 
         // Return the immediate child of `dir` best matching `needle`: exact name first, then starts-with,
