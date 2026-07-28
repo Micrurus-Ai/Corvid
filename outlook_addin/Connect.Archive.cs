@@ -102,6 +102,7 @@ namespace Axon.OutlookAddin
                         string code = Field(info, "code"), company = Field(info, "company"),
                                category = Field(info, "category"), year = Field(info, "year"), sap = Field(info, "sap");
                         if (string.IsNullOrWhiteSpace(year)) year = DateTime.Now.Year.ToString();
+                        var saps = OrderCandidates(subject, sap);   // every plausible order number, best first
                         string sender = ""; try { sender = (string)mail.SenderName; } catch { }
                         string senderEmail = ""; try { senderEmail = (string)mail.SenderEmailAddress; } catch { }
                         string body = ""; try { body = (string)mail.Body; } catch { }
@@ -109,7 +110,7 @@ namespace Axon.OutlookAddin
                         _archiveBaseDir = baseDir;
                         _archiveCompany = company;
                         System.Collections.Generic.List<string> matches, existing, reasons; string newRel;
-                        BuildArchiveSuggestions(baseDir, subject, sender, senderEmail, body, year, company, sap, code,
+                        BuildArchiveSuggestions(baseDir, subject, sender, senderEmail, body, year, company, saps, code,
                                                 out matches, out reasons, out newRel, out existing);
                         picker.SetFolders(existing.ToArray());
                         picker.SetSuggestions(matches.ToArray(), reasons.ToArray(), newRel);
@@ -207,6 +208,55 @@ namespace Axon.OutlookAddin
             return cfg;
         }
 
+        // The order number's CHARACTERISTICS, not a fixed format: it's a 4-6 digit number, it is NOT a
+        // date/year, and the true one is whichever candidate actually matches an order folder on disk. So
+        // we gather every plausible number from the subject, most-likely first, and let the folder search
+        // decide. This tolerates the many subject shapes ('14389 - ...', 'SOP 14212 - ...',
+        // 'm24887 PE-14285-01-ADL', 'PE-14328-05-ADL') without hardcoding any single one.
+        private static System.Collections.Generic.List<string> OrderCandidates(string subject, string aiSap)
+        {
+            var list = new System.Collections.Generic.List<string>();
+            System.Action<string> add = v =>
+            {
+                if (string.IsNullOrEmpty(v)) return;
+                int iv; bool yr = v.Length == 4 && int.TryParse(v, out iv) && iv >= 1990 && iv <= 2100;   // a year, not an order
+                if (!yr && !list.Contains(v)) list.Add(v);
+            };
+            string s = subject ?? "";
+            var ic = System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+            // Most likely first: a number in an order-code context (after PE / SOP / Order / Bestelling).
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(s, @"\b(?:PE|SOP|order|bestelling|commande)\b[-\s:#nr\.]*0*(\d{4,6})", ic))
+                add(m.Groups[1].Value);
+            // Then the model's own guess, if it's a plain number.
+            if (!string.IsNullOrEmpty(aiSap) && System.Text.RegularExpressions.Regex.IsMatch(aiSap, @"^\d{4,6}$")) add(aiSap);
+            // Then standalone numbers not glued to a letter (e.g. NOT the 24887 in 'm24887').
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(s, @"(?<![A-Za-z\d])(\d{4,6})(?![A-Za-z\d])"))
+                add(m.Groups[1].Value);
+            // Last resort: any 4-6 digit run at all (including letter-glued), so nothing is missed.
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(s, @"\d{4,6}"))
+                add(m.Value);
+            return list;
+        }
+
+        // Locate the order folder for one candidate number: fast path under the detected country, then the
+        // broad cross-country search. Returns null if that number isn't an order folder anywhere.
+        private string LocateOrder(string baseDir, string sopDir, string company, int cy, string sap,
+            System.Diagnostics.Stopwatch sw, int budgetMs)
+        {
+            if (string.IsNullOrEmpty(sap)) return null;
+            if (sopDir != null)
+                foreach (int y in new[] { cy, cy - 1, cy - 2 })
+                {
+                    string yf = FindChild(sopDir, y.ToString(), false);
+                    if (yf == null) continue;
+                    string cd = string.IsNullOrEmpty(company) ? null : FindChild(yf, company, false);
+                    string od = cd != null ? FindChild(cd, sap, false) : null;
+                    if (od == null) od = FindDescendant(yf, sap, 2, sw, budgetMs);
+                    if (od != null) return od;
+                }
+            return FindOrderAnywhere(baseDir, sap, sw, budgetMs);
+        }
+
         private System.Collections.Generic.Dictionary<string, object> ExtractArchiveInfo(dynamic mail, ArchiveCfg cfg)
         {
             string subject = ""; try { subject = (string)mail.Subject; } catch { }
@@ -273,7 +323,7 @@ namespace Axon.OutlookAddin
         private const string OrdersTypeFolder = "SOP";
 
         private void BuildArchiveSuggestions(string baseDir, string subject, string sender, string senderEmail, string body,
-            string year, string company, string sap, string code,
+            string year, string company, System.Collections.Generic.List<string> saps, string code,
             out System.Collections.Generic.List<string> matches, out System.Collections.Generic.List<string> reasons,
             out string newRel, out System.Collections.Generic.List<string> existing)
         {
@@ -300,28 +350,20 @@ namespace Axon.OutlookAddin
                 string dir = baseDir;
                 string codeDir = FindChild(dir, code, true);
                 string sopDir  = codeDir != null ? FindChild(codeDir, OrdersTypeFolder, true) : null;
-                string yearDir = null, clientDir = null, orderDir = null;
+                string yearDir = null, clientDir = null, orderDir = null, sap = "";
                 int cy; if (!int.TryParse((year ?? "").Trim(), out cy)) cy = DateTime.Now.Year;
 
-                // 1) Fast path: the order under the DETECTED country's SOP, in the current year or the two
-                // before it (year folders are SOP-number ranges, so an order that started earlier stays in
-                // the earlier year's folder even when this email is newer).
-                if (sopDir != null && !string.IsNullOrEmpty(sap))
-                    foreach (int y in new[] { cy, cy - 1, cy - 2 })
+                // Try each candidate number (best first) and take the FIRST that actually matches an order
+                // folder — that folder existence is what tells the real order number (14285) from a message
+                // ref (m24887) or a date, without hardcoding any subject format.
+                if (saps != null)
+                    foreach (var cand in saps)
                     {
-                        string yf = FindChild(sopDir, y.ToString(), false);   // "2026 (14334-)" starts with 2026
-                        if (yf == null) continue;
-                        string cd = string.IsNullOrEmpty(company) ? null : FindChild(yf, company, false);
-                        string od = cd != null ? FindChild(cd, sap, false) : null;        // fast: year\client\order
-                        if (od == null) od = FindDescendant(yf, sap, 2, sw, budgetMs);     // else search year\*\order
-                        if (od != null) { orderDir = od; break; }
+                        if (sw.ElapsedMilliseconds > budgetMs) break;
+                        string od = LocateOrder(baseDir, sopDir, company, cy, cand, sw, budgetMs);
+                        if (od != null) { orderDir = od; sap = cand; break; }
                     }
-
-                // 2) Broad fallback: the country AND client read from the email can BOTH be wrong (a "KLIMA"
-                // subject for an order actually filed under AB\Lutosa). The ORDER NUMBER is the reliable key,
-                // so search it across EVERY country code and recent years.
-                if (orderDir == null && !string.IsNullOrEmpty(sap))
-                    orderDir = FindOrderAnywhere(baseDir, sap, sw, budgetMs);
+                if (string.IsNullOrEmpty(sap) && saps != null && saps.Count > 0) sap = saps[0];   // for the create-new path
 
                 if (orderDir != null)
                 {
