@@ -245,16 +245,16 @@ namespace Axon.OutlookAddin
         {
             if (string.IsNullOrEmpty(sap)) return null;
             if (sopDir != null)
-                foreach (int y in new[] { cy, cy - 1, cy - 2 })
+                foreach (int y in new[] { cy, cy - 1 })   // current year and previous year only
                 {
                     string yf = FindChild(sopDir, y.ToString(), false);
                     if (yf == null) continue;
                     string cd = string.IsNullOrEmpty(company) ? null : FindChild(yf, company, false);
                     string od = cd != null ? FindChild(cd, sap, false) : null;
-                    if (od == null) od = FindDescendant(yf, sap, 2, sw, budgetMs);
+                    if (od == null) od = FindDescendant(yf, sap, 4, sw, budgetMs);   // full search within the year
                     if (od != null) return od;
                 }
-            return FindOrderAnywhere(baseDir, sap, sw, budgetMs);
+            return FindOrderAnywhere(baseDir, sap, cy, sw, budgetMs);
         }
 
         private System.Collections.Generic.Dictionary<string, object> ExtractArchiveInfo(dynamic mail, ArchiveCfg cfg)
@@ -344,14 +344,16 @@ namespace Axon.OutlookAddin
             {
                 if (!Directory.Exists(baseDir)) return;
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                const int budgetMs = 10000;
+                // Generous ceiling so the search is thorough; the range-jump below makes the normal case
+                // finish in well under a second, so this only bounds the rare fallback scan.
+                const int budgetMs = 20000;
 
                 // --- Deterministic descent: one listing per level, straight down the known template. ---
                 string dir = baseDir;
                 string codeDir = FindChild(dir, code, true);
                 string sopDir  = codeDir != null ? FindChild(codeDir, OrdersTypeFolder, true) : null;
                 string yearDir = null, clientDir = null, orderDir = null, sap = "";
-                int cy; if (!int.TryParse((year ?? "").Trim(), out cy)) cy = DateTime.Now.Year;
+                int cy = DateTime.Now.Year;   // "current year"; the search covers cy and cy-1 (previous year)
 
                 // Try each candidate number (best first) and take the FIRST that actually matches an order
                 // folder — that folder existence is what tells the real order number (14285) from a message
@@ -500,7 +502,7 @@ namespace Axon.OutlookAddin
         // detected country and client are unreliable, but the order number is unique — so this finds the
         // order wherever it actually lives. Efficient: single-level listings, newest years first, and
         // bounded by the shared time budget so a slow share can't hang.
-        private string FindOrderAnywhere(string baseDir, string sap, System.Diagnostics.Stopwatch sw, int budgetMs)
+        private string FindOrderAnywhere(string baseDir, string sap, int cy, System.Diagnostics.Stopwatch sw, int budgetMs)
         {
             try
             {
@@ -509,13 +511,14 @@ namespace Axon.OutlookAddin
                     if (sw.ElapsedMilliseconds > budgetMs) return null;
                     string sopDir = FindChild(codeDir, OrdersTypeFolder, true);
                     if (sopDir == null) continue;
-                    string[] years; try { years = Directory.GetDirectories(sopDir); } catch { continue; }
-                    System.Array.Sort(years); System.Array.Reverse(years);   // newest year first (names start with the year)
-                    int n = 0;
-                    foreach (var yf in years)
+                    // Only the current year and the previous year (per the filing convention); but WITHIN a
+                    // year folder search fully — every client and order, no breadth limit.
+                    foreach (int y in new[] { cy, cy - 1 })
                     {
-                        if (n++ >= 4 || sw.ElapsedMilliseconds > budgetMs) break;
-                        string od = FindDescendant(yf, sap, 2, sw, budgetMs);   // year\client\order
+                        if (sw.ElapsedMilliseconds > budgetMs) return null;
+                        string yf = FindChild(sopDir, y.ToString(), false);
+                        if (yf == null) continue;
+                        string od = FindDescendant(yf, sap, 4, sw, budgetMs);
                         if (od != null) return od;
                     }
                 }
