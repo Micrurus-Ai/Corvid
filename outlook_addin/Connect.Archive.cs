@@ -442,18 +442,13 @@ namespace Axon.OutlookAddin
             {
                 string b = TrimBody(body ?? "", 24000);   // keep newest + oldest of a long thread; never breaks
                 string prompt =
-                    "An email is being filed inside a customer ORDER folder. This may be a THREAD with several " +
-                    "back-and-forth messages (newest at the top) — read all of it, then decide two things about " +
-                    "the LATEST message (the one being filed), using the thread for context.\n" +
-                    "1) type — is it about an ORDER (order confirmation/details) or a QUOTATION (a quote, offer " +
-                    "or pricing)?\n" +
-                    "2) party — who is the correspondence with, judged by the ORIGINAL correspondent's email " +
-                    "DOMAIN (for a forwarded/threaded email, the external person in the conversation, NOT the " +
-                    "internal colleague who forwarded it):\n" +
-                    "   MI = INTERNAL — the correspondent's domain is one of OUR OWN group domains: " + InternalDomains + "\n" +
-                    "   MC = the CUSTOMER — the correspondent is this order's client (" + clientName + ")\n" +
-                    "   MS = a SUPPLIER — any other external company (domain not ours and not the customer)\n" +
-                    "Reply with ONLY JSON: {\"type\":\"Order|Quotation\",\"party\":\"MC|MI|MS\"}\n\n" +
+                    "An email is being filed inside a customer ORDER folder (this may be a THREAD — read all of " +
+                    "it). Identify the EXTERNAL company this email is CORRESPONDENCE with. For a forwarded or " +
+                    "threaded email that is the external party IN the conversation, NOT the internal colleague " +
+                    "who forwarded it. Also decide the type: an ORDER (order confirmation/details) or a " +
+                    "QUOTATION (a quote, offer or pricing).\n" +
+                    "Reply with ONLY JSON: {\"type\":\"Order|Quotation\",\"company\":\"the external company's short " +
+                    "name\",\"domain\":\"their email domain (e.g. company.com) or empty\"}\n\n" +
                     "Visible sender: " + sender + " <" + (senderEmail ?? "") + ">\nSubject: " + subject + "\n\n" + b;
                 string text = ModelComplete(prompt, 0);
                 var m = System.Text.RegularExpressions.Regex.Match(text ?? "", "\\{[\\s\\S]*\\}");
@@ -462,26 +457,41 @@ namespace Axon.OutlookAddin
                 var d = js.DeserializeObject(m.Value) as System.Collections.Generic.Dictionary<string, object>;
                 if (d == null) return;
                 string type = d.ContainsKey("type") && d["type"] != null ? d["type"].ToString().Trim() : "";
-                string party = d.ContainsKey("party") && d["party"] != null ? d["party"].ToString().Trim() : "";
-                if (party.Length == 0) return;
+                string corr = d.ContainsKey("company") && d["company"] != null ? d["company"].ToString().Trim() : "";
+                string dom  = d.ContainsKey("domain") && d["domain"] != null ? d["domain"].ToString().Trim().ToLowerInvariant() : "";
 
-                // Find the real subfolder for this party. Prefer one under the right type grouping
-                // (e.g. Order\MC), else any folder whose leaf is the party (e.g. MC directly under the order).
-                string best = null;
+                // Decide the party folder in code (more reliable than asking the model): our OWN domain -> MI
+                // (internal); the order's own customer -> MC; any other external company -> MS (supplier).
+                bool isInternal = false;
+                if (dom.Length > 0)
+                    foreach (var id in InternalDomains.Split(','))
+                    { string idt = id.Trim().ToLowerInvariant(); if (idt.Length > 0 && dom.IndexOf(idt, StringComparison.Ordinal) >= 0) { isInternal = true; break; } }
+                bool isCustomer = !string.IsNullOrEmpty(clientName) && !string.IsNullOrEmpty(corr)
+                                  && (corr.IndexOf(clientName, StringComparison.OrdinalIgnoreCase) >= 0
+                                      || clientName.IndexOf(corr, StringComparison.OrdinalIgnoreCase) >= 0);
+                string party = isInternal ? "MI" : (isCustomer ? "MC" : "MS");
+
+                // Find the folder: best is <order>...\<party>\<correspondent> (e.g. MS\Planetfan); fallback is
+                // the party folder itself (e.g. MS). Only folders that pass through the <party> segment count.
+                string partyCorr = null, partyOnly = null;
+                int orderDepth = orderRel.Split('\\').Length;
                 foreach (var rel in subfolders)
                 {
                     if (!rel.StartsWith(orderRel + "\\", StringComparison.OrdinalIgnoreCase)) continue;
                     var segs = rel.Split('\\');
-                    if (!string.Equals(segs[segs.Length - 1], party, StringComparison.OrdinalIgnoreCase)) continue;
-                    bool underType = type.Length > 0 && rel.IndexOf("\\" + type + "\\", StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (underType) { best = rel; break; }
-                    if (best == null) best = rel;
+                    bool underParty = false;
+                    for (int i = orderDepth; i < segs.Length; i++)
+                        if (string.Equals(segs[i], party, StringComparison.OrdinalIgnoreCase)) { underParty = true; break; }
+                    if (!underParty) continue;
+                    string leaf = segs[segs.Length - 1];
+                    if (string.Equals(leaf, party, StringComparison.OrdinalIgnoreCase))
+                    { if (partyOnly == null) partyOnly = rel; }
+                    else if (!string.IsNullOrEmpty(corr) && leaf.IndexOf(corr, StringComparison.OrdinalIgnoreCase) >= 0)
+                    { if (partyCorr == null || segs.Length > partyCorr.Split('\\').Length) partyCorr = rel; }
                 }
-                if (best == null) return;
-                chosenRel = best;
-                reason = party.Equals("MC", StringComparison.OrdinalIgnoreCase) ? "customer"
-                       : party.Equals("MI", StringComparison.OrdinalIgnoreCase) ? "internal"
-                       : party.Equals("MS", StringComparison.OrdinalIgnoreCase) ? "supplier" : party;
+                chosenRel = partyCorr ?? partyOnly;
+                if (chosenRel == null) return;
+                reason = party == "MC" ? "customer" : party == "MI" ? "internal" : "supplier";
             }
             catch { }
         }
