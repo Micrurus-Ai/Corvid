@@ -489,10 +489,17 @@ namespace Axon.OutlookAddin
             return null;
         }
 
-        // Inside an order the email is filed by TYPE (Order = an order, Quotation = a quote) and by WHO it
-        // is with (MC = the customer/client, MI = an internal group company, MS = a supplier). Ask the
-        // model to classify, then match that to a real subfolder of this order. Returns the folder to
-        // pre-select and a one-word reason, or nulls if it can't decide / the folder isn't there.
+        // Inside an order the email is filed by WHO it is with — MC = the customer (the order's own client),
+        // MS = a supplier, MI = a sister Axon-Group company — and, when the order has that extra level, by
+        // TYPE (Order vs Quote). We decide this WITHOUT trusting who SENT the mail: a forward is sent by our
+        // own Axon address but is still usually customer or supplier correspondence, so keying off the sender
+        // wrongly makes everything "internal". Instead: the order's CLIENT folder already names the customer,
+        // and the email DOMAINS name the correspondent.
+        //   1. A domain that names a real sub-folder (planetfan.com -> MS\Planetfan) wins outright.
+        //   2. Else: an external domain that is the customer -> MC; another external domain -> MS; no external
+        //      domain at all -> MC (customer correspondence is the common case; the user can still pick MI).
+        //      Then choose that party's folder, preferring the 'Order' branch when the order nests by type.
+        // Returns the folder to pre-select and a one-word reason, or nulls if that folder isn't there.
         private void PickOrderCategory(string subject, string sender, string senderEmail, string body,
             string clientName, string orderRel, System.Collections.Generic.List<string> subfolders,
             out string chosenRel, out string reason)
@@ -500,93 +507,72 @@ namespace Axon.OutlookAddin
             chosenRel = null; reason = null;
             try
             {
-                string b = TrimBody(body ?? "", 24000);   // keep newest + oldest of a long thread; never breaks
-                // The reliable signal for WHO the email is with is the email DOMAINS in the conversation, not
-                // the model's reading. Collect the external (non-Axon) ones and hand them to the model.
-                var externalDomains = new System.Collections.Generic.List<string>();
-                var seenDom = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (System.Text.RegularExpressions.Match mm in System.Text.RegularExpressions.Regex.Matches((senderEmail ?? "") + " " + b, @"[\w.+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})"))
+                var labels = EmailDomainLabels(senderEmail, body);
+                // The real customer is the order's parent (client) folder, not a model guess.
+                var orderSegs = orderRel.Split('\\');
+                string clientFolder = orderSegs.Length >= 2 ? orderSegs[orderSegs.Length - 2] : (clientName ?? "");
+                string cust = (clientFolder ?? "").ToLowerInvariant();
+                System.Func<string, bool> isCust = nm => cust.Length >= 3 && nm.Length >= 3
+                    && (cust.IndexOf(nm, StringComparison.Ordinal) >= 0 || nm.IndexOf(cust, StringComparison.Ordinal) >= 0);
+
+                // 1) A domain that names a real sub-folder (a supplier like Planetfan). Skip the customer's own
+                //    name (the customer files in MC, it has no named leaf) and the reserved category folders.
+                foreach (var nm in labels)
                 {
-                    string dm = mm.Groups[1].Value.ToLowerInvariant();
-                    if (!seenDom.Add(dm)) continue;
-                    bool intl = false;
-                    foreach (var id in InternalDomains.Split(',')) { string idt = id.Trim().ToLowerInvariant(); if (idt.Length > 0 && dm.IndexOf(idt, StringComparison.Ordinal) >= 0) { intl = true; break; } }
-                    if (!intl) externalDomains.Add(dm);
-                }
-                string domainHint = externalDomains.Count > 0
-                    ? "The external (non-Axon) email domains that appear in this conversation are: " + string.Join(", ", externalDomains.ToArray()) + ". " : "";
-                string prompt =
-                    "This email is being filed under an ORDER that belongs to the CUSTOMER '" + clientName + "'. " +
-                    "Identify who THIS email is actually CORRESPONDENCE with — the company that SENT it (for a " +
-                    "forward, the ORIGINAL sender in the quoted message's 'From:' line, NOT the internal colleague " +
-                    "who forwarded it). This is OFTEN NOT the customer: e.g. a SUPPLIER sending a quote about the " +
-                    "order. " + domainHint + "Prefer whichever of those domains actually sent the message. " +
-                    "Also decide the type: ORDER (order confirmation/details) or QUOTATION (a quote/offer/pricing).\n" +
-                    "Reply with ONLY JSON: {\"type\":\"Order|Quotation\",\"company\":\"the sender's company short " +
-                    "name\",\"domain\":\"the sender's email domain\"}\n\n" +
-                    "Visible sender (may be the internal forwarder): " + sender + " <" + (senderEmail ?? "") + ">\n" +
-                    "Subject: " + subject + "\n\n" + b;
-                string text = ModelComplete(prompt, 0);
-                var m = System.Text.RegularExpressions.Regex.Match(text ?? "", "\\{[\\s\\S]*\\}");
-                if (!m.Success) return;
-                var js = new System.Web.Script.Serialization.JavaScriptSerializer();
-                var d = js.DeserializeObject(m.Value) as System.Collections.Generic.Dictionary<string, object>;
-                if (d == null) return;
-                string dom  = d.ContainsKey("domain") && d["domain"] != null ? d["domain"].ToString().Trim().ToLowerInvariant() : "";
-
-                // PRIMARY signal: an email domain usually carries the company name (planetfan.com -> the
-                // "Planetfan" folder), and the sub-folders under MC/MI/MS are named after companies. So match
-                // a domain directly to a company-named sub-folder of this order — the sender's domain first,
-                // then the other external domains seen in the email. That decides the exact leaf deterministically.
-                var domsToTry = new System.Collections.Generic.List<string>();
-                if (!string.IsNullOrEmpty(dom)) domsToTry.Add(dom);
-                foreach (var e in externalDomains) if (!domsToTry.Contains(e)) domsToTry.Add(e);
-                foreach (var dm in domsToTry)
-                    foreach (var nm in DomainLabels(dm))
+                    if (nm.Length < 3 || isCust(nm)) continue;
+                    string hit = null;
+                    foreach (var rel in subfolders)
                     {
-                        string hit = null;
-                        foreach (var rel in subfolders)
-                        {
-                            if (!rel.StartsWith(orderRel + "\\", StringComparison.OrdinalIgnoreCase)) continue;
-                            string leaf = rel.Substring(rel.LastIndexOf('\\') + 1);
-                            if (leaf.Length >= 3 && (leaf.IndexOf(nm, StringComparison.OrdinalIgnoreCase) >= 0
-                                                     || nm.IndexOf(leaf, StringComparison.OrdinalIgnoreCase) >= 0))
-                                if (hit == null || rel.Split('\\').Length > hit.Split('\\').Length) hit = rel;   // deepest
-                        }
-                        if (hit != null)
-                        {
-                            chosenRel = hit;
-                            reason = (hit.IndexOf("\\MC", StringComparison.OrdinalIgnoreCase) >= 0) ? "customer"
-                                   : (hit.IndexOf("\\MI", StringComparison.OrdinalIgnoreCase) >= 0) ? "internal"
-                                   : (hit.IndexOf("\\MS", StringComparison.OrdinalIgnoreCase) >= 0) ? "supplier" : "match";
-                            return;
-                        }
+                        if (!rel.StartsWith(orderRel + "\\", StringComparison.OrdinalIgnoreCase)) continue;
+                        string leaf = rel.Substring(rel.LastIndexOf('\\') + 1);
+                        if (IsReservedCategory(leaf)) continue;
+                        if (leaf.Length >= 3 && (leaf.IndexOf(nm, StringComparison.OrdinalIgnoreCase) >= 0
+                                                 || nm.IndexOf(leaf, StringComparison.OrdinalIgnoreCase) >= 0))
+                            if (hit == null || rel.Split('\\').Length > hit.Split('\\').Length) hit = rel;   // deepest
                     }
+                    if (hit != null) { chosenRel = hit; reason = PartyReason(hit); return; }
+                }
 
-                // Fallback (no company-named sub-folder matched a domain, e.g. customer mail that goes in MC
-                // directly): pick the party folder by role — our domain -> MI, the order's customer -> MC,
-                // else MS.
-                bool isInternal = false;   // dom was excluded from externalDomains already if internal
-                if (dom.Length > 0)
-                    foreach (var id in InternalDomains.Split(','))
-                    { string idt = id.Trim().ToLowerInvariant(); if (idt.Length > 0 && dom.IndexOf(idt, StringComparison.Ordinal) >= 0) { isInternal = true; break; } }
-                string corr = d.ContainsKey("company") && d["company"] != null ? d["company"].ToString().Trim() : "";
-                bool isCustomer = !string.IsNullOrEmpty(clientName) && !string.IsNullOrEmpty(corr)
-                                  && (corr.IndexOf(clientName, StringComparison.OrdinalIgnoreCase) >= 0
-                                      || clientName.IndexOf(corr, StringComparison.OrdinalIgnoreCase) >= 0);
-                string party = isInternal ? "MI" : (isCustomer ? "MC" : "MS");
-                string partyOnly = null;
+                // 2) Party by the correspondent (not the sender): the customer -> MC, another external company
+                //    -> MS, nothing external -> MC (default; user can still choose MI).
+                bool custExternal = false, otherExternal = false;
+                foreach (var nm in labels) { if (isCust(nm)) custExternal = true; else otherExternal = true; }
+                string party = custExternal ? "MC" : (otherExternal ? "MS" : "MC");
+
+                // Choose that party's folder; prefer the one under an 'Order' type branch (some orders nest
+                // MC/MI/MS under Order/Quote, others put them directly under the order).
+                string best = null;
                 foreach (var rel in subfolders)
                 {
                     if (!rel.StartsWith(orderRel + "\\", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (string.Equals(rel.Substring(rel.LastIndexOf('\\') + 1), party, StringComparison.OrdinalIgnoreCase))
-                    { partyOnly = rel; break; }
+                    if (!string.Equals(rel.Substring(rel.LastIndexOf('\\') + 1), party, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (best == null) { best = rel; continue; }
+                    if (rel.IndexOf("\\Order\\", StringComparison.OrdinalIgnoreCase) >= 0
+                        && best.IndexOf("\\Order\\", StringComparison.OrdinalIgnoreCase) < 0) best = rel;
                 }
-                chosenRel = partyOnly;
+                chosenRel = best;
                 if (chosenRel == null) return;
                 reason = party == "MC" ? "customer" : party == "MI" ? "internal" : "supplier";
             }
             catch { }
+        }
+
+        // Category folders that are structural, not company names — never treated as a supplier leaf.
+        private static bool IsReservedCategory(string leaf)
+        {
+            switch ((leaf ?? "").ToUpperInvariant())
+            {
+                case "MC": case "MI": case "MS": case "ORDER": case "QUOTE": case "QUOTATION":
+                case "DOCUMENTS": case "PO": case "SO": case "INTERNAL": return true;
+                default: return false;
+            }
+        }
+
+        private static string PartyReason(string rel)
+        {
+            return (rel.IndexOf("\\MC", StringComparison.OrdinalIgnoreCase) >= 0) ? "customer"
+                 : (rel.IndexOf("\\MI", StringComparison.OrdinalIgnoreCase) >= 0) ? "internal"
+                 : (rel.IndexOf("\\MS", StringComparison.OrdinalIgnoreCase) >= 0) ? "supplier" : "match";
         }
 
         // Search the order number across EVERY country-code folder and its recent year folders. The email's
