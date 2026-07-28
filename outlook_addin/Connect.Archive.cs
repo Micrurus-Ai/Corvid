@@ -443,15 +443,31 @@ namespace Axon.OutlookAddin
             try
             {
                 string b = TrimBody(body ?? "", 24000);   // keep newest + oldest of a long thread; never breaks
+                // The reliable signal for WHO the email is with is the email DOMAINS in the conversation, not
+                // the model's reading. Collect the external (non-Axon) ones and hand them to the model.
+                var externalDomains = new System.Collections.Generic.List<string>();
+                var seenDom = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (System.Text.RegularExpressions.Match mm in System.Text.RegularExpressions.Regex.Matches((senderEmail ?? "") + " " + b, @"[\w.+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})"))
+                {
+                    string dm = mm.Groups[1].Value.ToLowerInvariant();
+                    if (!seenDom.Add(dm)) continue;
+                    bool intl = false;
+                    foreach (var id in InternalDomains.Split(',')) { string idt = id.Trim().ToLowerInvariant(); if (idt.Length > 0 && dm.IndexOf(idt, StringComparison.Ordinal) >= 0) { intl = true; break; } }
+                    if (!intl) externalDomains.Add(dm);
+                }
+                string domainHint = externalDomains.Count > 0
+                    ? "The external (non-Axon) email domains that appear in this conversation are: " + string.Join(", ", externalDomains.ToArray()) + ". " : "";
                 string prompt =
-                    "An email is being filed inside a customer ORDER folder (this may be a THREAD — read all of " +
-                    "it). Identify the EXTERNAL company this email is CORRESPONDENCE with. For a forwarded or " +
-                    "threaded email that is the external party IN the conversation, NOT the internal colleague " +
-                    "who forwarded it. Also decide the type: an ORDER (order confirmation/details) or a " +
-                    "QUOTATION (a quote, offer or pricing).\n" +
-                    "Reply with ONLY JSON: {\"type\":\"Order|Quotation\",\"company\":\"the external company's short " +
-                    "name\",\"domain\":\"their email domain (e.g. company.com) or empty\"}\n\n" +
-                    "Visible sender: " + sender + " <" + (senderEmail ?? "") + ">\nSubject: " + subject + "\n\n" + b;
+                    "This email is being filed under an ORDER that belongs to the CUSTOMER '" + clientName + "'. " +
+                    "Identify who THIS email is actually CORRESPONDENCE with — the company that SENT it (for a " +
+                    "forward, the ORIGINAL sender in the quoted message's 'From:' line, NOT the internal colleague " +
+                    "who forwarded it). This is OFTEN NOT the customer: e.g. a SUPPLIER sending a quote about the " +
+                    "order. " + domainHint + "Prefer whichever of those domains actually sent the message. " +
+                    "Also decide the type: ORDER (order confirmation/details) or QUOTATION (a quote/offer/pricing).\n" +
+                    "Reply with ONLY JSON: {\"type\":\"Order|Quotation\",\"company\":\"the sender's company short " +
+                    "name\",\"domain\":\"the sender's email domain\"}\n\n" +
+                    "Visible sender (may be the internal forwarder): " + sender + " <" + (senderEmail ?? "") + ">\n" +
+                    "Subject: " + subject + "\n\n" + b;
                 string text = ModelComplete(prompt, 0);
                 var m = System.Text.RegularExpressions.Regex.Match(text ?? "", "\\{[\\s\\S]*\\}");
                 if (!m.Success) return;
