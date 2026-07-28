@@ -431,6 +431,23 @@ namespace Axon.OutlookAddin
             "almeco.be, axongroup.com, noviso.eu, coateq.be, proceq.eu, dimplesteel.com, " +
             "akwaplus.be, enviro-tech.nl, pcacontrol.com, pcawater.com, pca-air.com";
 
+        // Common top-level domains / mail prefixes to drop when turning an email domain into a company name,
+        // so "planetfan.com" / "mail.saleenco.co.uk" yield "planetfan" / "saleenco".
+        private static readonly System.Collections.Generic.HashSet<string> DomainTlds =
+            new System.Collections.Generic.HashSet<string>(
+                new[] { "com","be","nl","eu","org","net","co","uk","de","fr","lu","info","biz","io","email","mail","www" },
+                StringComparer.OrdinalIgnoreCase);
+
+        // The name-carrying labels of an email domain (drops the TLD and mail prefixes): planetfan.com -> {planetfan}.
+        private static System.Collections.Generic.List<string> DomainLabels(string domain)
+        {
+            var res = new System.Collections.Generic.List<string>();
+            if (string.IsNullOrEmpty(domain)) return res;
+            foreach (var lbl in domain.Split('.'))
+            { string l = lbl.Trim(); if (l.Length >= 3 && !DomainTlds.Contains(l)) res.Add(l); }
+            return res;
+        }
+
         // Inside an order the email is filed by TYPE (Order = an order, Quotation = a quote) and by WHO it
         // is with (MC = the customer/client, MI = an internal group company, MS = a supplier). Ask the
         // model to classify, then match that to a real subfolder of this order. Returns the folder to
@@ -474,40 +491,57 @@ namespace Axon.OutlookAddin
                 var js = new System.Web.Script.Serialization.JavaScriptSerializer();
                 var d = js.DeserializeObject(m.Value) as System.Collections.Generic.Dictionary<string, object>;
                 if (d == null) return;
-                string type = d.ContainsKey("type") && d["type"] != null ? d["type"].ToString().Trim() : "";
-                string corr = d.ContainsKey("company") && d["company"] != null ? d["company"].ToString().Trim() : "";
                 string dom  = d.ContainsKey("domain") && d["domain"] != null ? d["domain"].ToString().Trim().ToLowerInvariant() : "";
 
-                // Decide the party folder in code (more reliable than asking the model): our OWN domain -> MI
-                // (internal); the order's own customer -> MC; any other external company -> MS (supplier).
-                bool isInternal = false;
+                // PRIMARY signal: an email domain usually carries the company name (planetfan.com -> the
+                // "Planetfan" folder), and the sub-folders under MC/MI/MS are named after companies. So match
+                // a domain directly to a company-named sub-folder of this order — the sender's domain first,
+                // then the other external domains seen in the email. That decides the exact leaf deterministically.
+                var domsToTry = new System.Collections.Generic.List<string>();
+                if (!string.IsNullOrEmpty(dom)) domsToTry.Add(dom);
+                foreach (var e in externalDomains) if (!domsToTry.Contains(e)) domsToTry.Add(e);
+                foreach (var dm in domsToTry)
+                    foreach (var nm in DomainLabels(dm))
+                    {
+                        string hit = null;
+                        foreach (var rel in subfolders)
+                        {
+                            if (!rel.StartsWith(orderRel + "\\", StringComparison.OrdinalIgnoreCase)) continue;
+                            string leaf = rel.Substring(rel.LastIndexOf('\\') + 1);
+                            if (leaf.Length >= 3 && (leaf.IndexOf(nm, StringComparison.OrdinalIgnoreCase) >= 0
+                                                     || nm.IndexOf(leaf, StringComparison.OrdinalIgnoreCase) >= 0))
+                                if (hit == null || rel.Split('\\').Length > hit.Split('\\').Length) hit = rel;   // deepest
+                        }
+                        if (hit != null)
+                        {
+                            chosenRel = hit;
+                            reason = (hit.IndexOf("\\MC", StringComparison.OrdinalIgnoreCase) >= 0) ? "customer"
+                                   : (hit.IndexOf("\\MI", StringComparison.OrdinalIgnoreCase) >= 0) ? "internal"
+                                   : (hit.IndexOf("\\MS", StringComparison.OrdinalIgnoreCase) >= 0) ? "supplier" : "match";
+                            return;
+                        }
+                    }
+
+                // Fallback (no company-named sub-folder matched a domain, e.g. customer mail that goes in MC
+                // directly): pick the party folder by role — our domain -> MI, the order's customer -> MC,
+                // else MS.
+                bool isInternal = false;   // dom was excluded from externalDomains already if internal
                 if (dom.Length > 0)
                     foreach (var id in InternalDomains.Split(','))
                     { string idt = id.Trim().ToLowerInvariant(); if (idt.Length > 0 && dom.IndexOf(idt, StringComparison.Ordinal) >= 0) { isInternal = true; break; } }
+                string corr = d.ContainsKey("company") && d["company"] != null ? d["company"].ToString().Trim() : "";
                 bool isCustomer = !string.IsNullOrEmpty(clientName) && !string.IsNullOrEmpty(corr)
                                   && (corr.IndexOf(clientName, StringComparison.OrdinalIgnoreCase) >= 0
                                       || clientName.IndexOf(corr, StringComparison.OrdinalIgnoreCase) >= 0);
                 string party = isInternal ? "MI" : (isCustomer ? "MC" : "MS");
-
-                // Find the folder: best is <order>...\<party>\<correspondent> (e.g. MS\Planetfan); fallback is
-                // the party folder itself (e.g. MS). Only folders that pass through the <party> segment count.
-                string partyCorr = null, partyOnly = null;
-                int orderDepth = orderRel.Split('\\').Length;
+                string partyOnly = null;
                 foreach (var rel in subfolders)
                 {
                     if (!rel.StartsWith(orderRel + "\\", StringComparison.OrdinalIgnoreCase)) continue;
-                    var segs = rel.Split('\\');
-                    bool underParty = false;
-                    for (int i = orderDepth; i < segs.Length; i++)
-                        if (string.Equals(segs[i], party, StringComparison.OrdinalIgnoreCase)) { underParty = true; break; }
-                    if (!underParty) continue;
-                    string leaf = segs[segs.Length - 1];
-                    if (string.Equals(leaf, party, StringComparison.OrdinalIgnoreCase))
-                    { if (partyOnly == null) partyOnly = rel; }
-                    else if (!string.IsNullOrEmpty(corr) && leaf.IndexOf(corr, StringComparison.OrdinalIgnoreCase) >= 0)
-                    { if (partyCorr == null || segs.Length > partyCorr.Split('\\').Length) partyCorr = rel; }
+                    if (string.Equals(rel.Substring(rel.LastIndexOf('\\') + 1), party, StringComparison.OrdinalIgnoreCase))
+                    { partyOnly = rel; break; }
                 }
-                chosenRel = partyCorr ?? partyOnly;
+                chosenRel = partyOnly;
                 if (chosenRel == null) return;
                 reason = party == "MC" ? "customer" : party == "MI" ? "internal" : "supplier";
             }
