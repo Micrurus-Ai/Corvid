@@ -298,18 +298,41 @@ namespace Axon.OutlookAddin
 
                 // --- Deterministic descent: one listing per level, straight down the known template. ---
                 string dir = baseDir;
-                string codeDir   = FindChild(dir, code, true);        if (codeDir   != null) dir = codeDir;   // Sales\AB
-                string sopDir    = FindChild(dir, OrdersTypeFolder, true); if (sopDir != null) dir = sopDir;   // ...\SOP
-                string yearDir   = FindChild(dir, year, false);       if (yearDir   != null) dir = yearDir;   // ...\2026 (14334-)
-                string clientDir = FindChild(dir, company, false);    if (clientDir != null) dir = clientDir; // ...\Voestalpine
-                string orderDir  = FindChild(dir, sap, false);        // ...\14457_ADD low noise
-                // Fallback: if the client wasn't identified (e.g. a forward), the order sits a level or two
-                // below where we stopped — a small bounded search from here still finds it by its number.
-                if (orderDir == null && !string.IsNullOrEmpty(sap))
+                string codeDir = FindChild(dir, code, true);              if (codeDir != null) dir = codeDir;  // Sales\AB
+                string sopDir  = FindChild(dir, OrdersTypeFolder, true);  if (sopDir  != null) dir = sopDir;   // ...\SOP
+
+                string yearDir = null, clientDir = null, orderDir = null;
+                if (sopDir != null)
                 {
-                    orderDir = FindDescendant(dir, sap, 2, sw, budgetMs);
-                    if (orderDir != null && clientDir == null)
-                        try { clientDir = System.IO.Directory.GetParent(orderDir).FullName; } catch { }
+                    int cy; if (!int.TryParse((year ?? "").Trim(), out cy)) cy = DateTime.Now.Year;
+
+                    // The year folders are SOP-NUMBER RANGES (e.g. "2025 (14094-)" = 14094..14333), so an
+                    // order stays in the folder of the year it STARTED even if this email is from a later
+                    // year. Look for the order number in the current year and the two before it.
+                    if (!string.IsNullOrEmpty(sap))
+                        foreach (int y in new[] { cy, cy - 1, cy - 2 })
+                        {
+                            string yf = FindChild(sopDir, y.ToString(), false);   // "2026 (14334-)" starts with 2026
+                            if (yf == null) continue;
+                            string cd = string.IsNullOrEmpty(company) ? null : FindChild(yf, company, false);
+                            string od = cd != null ? FindChild(cd, sap, false) : null;        // fast: year\client\order
+                            if (od == null) od = FindDescendant(yf, sap, 2, sw, budgetMs);     // else search year\*\order
+                            if (od != null)
+                            {
+                                orderDir = od; yearDir = yf; clientDir = cd;
+                                if (clientDir == null) try { clientDir = System.IO.Directory.GetParent(od).FullName; } catch { }
+                                break;
+                            }
+                        }
+
+                    // Order not filed yet: for the "create new" path, place it under the CURRENT year
+                    // (a new order starts this year) and the client folder if it already exists.
+                    if (orderDir == null)
+                    {
+                        yearDir = FindChild(sopDir, cy.ToString(), false);
+                        clientDir = (yearDir != null && !string.IsNullOrEmpty(company)) ? FindChild(yearDir, company, false) : null;
+                    }
+                    dir = clientDir ?? yearDir ?? sopDir;
                 }
 
                 if (orderDir != null)
@@ -615,6 +638,12 @@ namespace Axon.OutlookAddin
                         {
                             try
                             {
+                                // Skip inline images (signature logos etc.): they're HIDDEN attachments
+                                // embedded in the message body (they have a content-id), not real documents,
+                                // and would clutter the archive folder with image001.png and the like.
+                                bool hidden = false;
+                                try { hidden = (bool)att.PropertyAccessor.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x7FFE000B"); } catch { }
+                                if (hidden) continue;
                                 string an = (string)att.FileName;
                                 foreach (char c in Path.GetInvalidFileNameChars()) an = an.Replace(c, ' ');
                                 string ap = Path.Combine(folder, an);
