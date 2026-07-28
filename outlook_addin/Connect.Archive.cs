@@ -355,16 +355,29 @@ namespace Axon.OutlookAddin
                 string yearDir = null, clientDir = null, orderDir = null, sap = "";
                 int cy = DateTime.Now.Year;   // "current year"; the search covers cy and cy-1 (previous year)
 
-                // Try each candidate number (best first) and take the FIRST that actually matches an order
-                // folder — that folder existence is what tells the real order number (14285) from a message
-                // ref (m24887) or a date, without hardcoding any subject format.
+                // The correspondent's domain name-labels (planetfan.com -> "planetfan"), read from the sender
+                // and thread — used to CONFIRM which candidate is the real order.
+                var domLabels = EmailDomainLabels(senderEmail, body);
+
+                // Try each candidate number (best first). Folder existence tells the real order number (14285)
+                // from a message ref (m24887) or a date. And when the correspondent's domain ALSO names a
+                // folder inside a candidate's order (e.g. ...\14285\...\MS\Planetfan), that candidate is
+                // confirmed and wins even over an earlier one that merely exists — so the two SAP numbers and
+                // the domain are checked together.
+                string fallbackOrder = null, fallbackSap = "";
                 if (saps != null)
                     foreach (var cand in saps)
                     {
                         if (sw.ElapsedMilliseconds > budgetMs) break;
                         string od = LocateOrder(baseDir, sopDir, company, cy, cand, sw, budgetMs);
-                        if (od != null) { orderDir = od; sap = cand; break; }
+                        if (od == null) continue;
+                        if (fallbackOrder == null) { fallbackOrder = od; fallbackSap = cand; }
+                        // No domain to check, or the correspondent's folder is inside this order -> take it now.
+                        if (domLabels.Count == 0 || FindDomainFolderIn(od, domLabels, sw, budgetMs) != null)
+                        { orderDir = od; sap = cand; break; }
+                        // Located, but the domain isn't under this order — keep looking for a better candidate.
                     }
+                if (orderDir == null && fallbackOrder != null) { orderDir = fallbackOrder; sap = fallbackSap; }
                 if (string.IsNullOrEmpty(sap) && saps != null && saps.Count > 0) sap = saps[0];   // for the create-new path
 
                 if (orderDir != null)
@@ -446,6 +459,34 @@ namespace Axon.OutlookAddin
             foreach (var lbl in domain.Split('.'))
             { string l = lbl.Trim(); if (l.Length >= 3 && !DomainTlds.Contains(l)) res.Add(l); }
             return res;
+        }
+
+        // The external (non-Axon) domain name-labels seen in an email — a mail from sales@planetfan.com yields
+        // {"planetfan"}. Used to confirm which candidate order is the real one and to pick the sub-folder.
+        private static System.Collections.Generic.List<string> EmailDomainLabels(string senderEmail, string body)
+        {
+            var labels = new System.Collections.Generic.List<string>();
+            var seen = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (System.Text.RegularExpressions.Match mm in System.Text.RegularExpressions.Regex.Matches((senderEmail ?? "") + " " + (body ?? ""), @"[\w.+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})"))
+            {
+                string dm = mm.Groups[1].Value.ToLowerInvariant();
+                bool intl = false;
+                foreach (var id in InternalDomains.Split(',')) { string idt = id.Trim().ToLowerInvariant(); if (idt.Length > 0 && dm.IndexOf(idt, StringComparison.Ordinal) >= 0) { intl = true; break; } }
+                if (intl) continue;
+                foreach (var l in DomainLabels(dm)) if (seen.Add(l)) labels.Add(l);
+            }
+            return labels;
+        }
+
+        // The first descendant of an order whose folder name matches one of these domain labels (the
+        // "Planetfan" folder for planetfan.com), or null. Bounded by the same depth/time budget as the search.
+        private static string FindDomainFolderIn(string orderDir, System.Collections.Generic.List<string> labels,
+            System.Diagnostics.Stopwatch sw, int budgetMs)
+        {
+            if (labels == null) return null;
+            foreach (var l in labels)
+            { var hit = FindDescendant(orderDir, l, 4, sw, budgetMs); if (hit != null) return hit; }
+            return null;
         }
 
         // Inside an order the email is filed by TYPE (Order = an order, Quotation = a quote) and by WHO it
